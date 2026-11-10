@@ -1,5 +1,10 @@
-# Tools for running the scripts and their tests on a laptop.
-# PySpark is added in phase 2, pinned to the version the Glue runtime uses.
+# Tools for running the jobs, scripts and tests on a laptop.
+# Use Python 3.11: that is the Python version inside AWS Glue 5.1.
+
+# Pinned to the exact Spark version of AWS Glue 5.1, so a job that passes
+# locally runs on the same Spark on Glue.
+pyspark==3.5.6
+
 boto3>=1.35
 pytest>=8.0
 moto[s3]>=5.0
