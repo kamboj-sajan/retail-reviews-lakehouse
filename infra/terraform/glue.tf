@@ -14,15 +14,43 @@ locals {
       # Read stage: gzip cannot be split, so each source file is read by a
       # single task. Workers only help after that, in the shuffle and write.
       # Auto scaling (below) releases idle workers during the read.
-      max_workers = 10
+      max_workers     = 10
+      execution_class = "FLEX"
+      auto_scaling    = true
+      timeout_minutes = 60
+      # Up to 4 months can load at the same time. Safe because a monthly run
+      # lists and replaces only its own month's folders.
+      max_concurrent_runs = 4
     }
     clean_products = {
-      description = "raw product JSON -> cleaned/products Parquet"
-      max_workers = 4
+      description         = "raw product JSON -> cleaned/products Parquet"
+      max_workers         = 4
+      execution_class     = "FLEX"
+      auto_scaling        = true
+      timeout_minutes     = 60
+      max_concurrent_runs = 1
     }
     build_curated = {
-      description = "cleaned reviews + products -> curated tables"
-      max_workers = 10
+      description         = "cleaned reviews + products -> curated tables"
+      max_workers         = 10
+      execution_class     = "FLEX"
+      auto_scaling        = true
+      timeout_minutes     = 60
+      max_concurrent_runs = 4
+    }
+    split_raw_by_month = {
+      description = "run once: raw review files -> one gzip file per category and month (raw/feed)"
+      # Three source files means three tasks, and no shuffle, so one executor
+      # with 4 cores does all the work: 2 workers = 1 driver + 1 executor.
+      max_workers = 2
+      # STANDARD, not FLEX: the Electronics task reads one gzip stream for
+      # about 25 minutes. If FLEX reclaims that worker, the task starts again
+      # from byte 0 (docs/decisions.md). Paying 50% more per DPU-hour is
+      # cheaper than paying for that read twice.
+      execution_class     = "STANDARD"
+      auto_scaling        = false
+      timeout_minutes     = 90
+      max_concurrent_runs = 1
     }
   }
 }
@@ -117,6 +145,17 @@ data "aws_iam_policy_document" "glue_job" {
     resources = ["${aws_s3_bucket.lake["raw"].arn}/*"]
   }
 
+  # The one-time monthly split writes under raw/feed/. Everything else in raw
+  # (the downloaded files, landing/) stays read-only to Glue.
+  statement {
+    sid = "WriteRawFeed"
+    actions = [
+      "s3:PutObject", "s3:DeleteObject",
+      "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts",
+    ]
+    resources = ["${aws_s3_bucket.lake["raw"].arn}/feed/*"]
+  }
+
   # Delete is needed because overwriting a partition deletes its old files.
   statement {
     sid = "ReadWriteCleanedCuratedQuarantine"
@@ -174,8 +213,9 @@ resource "aws_glue_job" "job" {
   glue_version = "6.0"
 
   # FLEX runs on spare capacity: about a third cheaper per DPU-hour, but a run
-  # can wait longer to start. Fine for batch loads nobody is waiting on.
-  execution_class = "FLEX"
+  # can wait longer to start and a worker can be taken back mid-run. Fine for
+  # batch loads nobody is waiting on; see split_raw_by_month for the exception.
+  execution_class = each.value.execution_class
 
   # G.1X = 1 DPU = 4 vCPU and 16 GB per worker. With auto scaling on,
   # number_of_workers is the MAXIMUM; Glue adds and removes workers based on
@@ -184,7 +224,11 @@ resource "aws_glue_job" "job" {
   number_of_workers = each.value.max_workers
 
   # A run that hangs is billed until it times out, so keep this tight.
-  timeout = 60
+  timeout = each.value.timeout_minutes
+
+  execution_property {
+    max_concurrent_runs = each.value.max_concurrent_runs
+  }
   # Retries are the orchestrator's job (Step Functions, phase 3). A retry here
   # would be invisible to it.
   max_retries = 0
@@ -205,7 +249,7 @@ resource "aws_glue_job" "job" {
     # One JSON record per run: row counts, bytes, duration (lakehouse/metrics.py).
     "--metrics_path" = "s3://${local.artifacts.id}/metrics"
 
-    "--enable-auto-scaling"              = "true"
+    "--enable-auto-scaling"              = tostring(each.value.auto_scaling)
     "--enable-continuous-cloudwatch-log" = "true"
     # Keeps Spark's event log, so the Spark UI for a finished run can be
     # replayed later to see stages, shuffle sizes and skew.
