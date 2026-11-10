@@ -257,3 +257,113 @@ Curated tables are partitioned by `review_month` for the same reason as the
 cleaned reviews: one month can be rebuilt without touching the others. For
 the small category tables that means a tiny file per month. That is accepted
 in exchange for one idempotency mechanism across every table.
+
+## Phase 2: ETL on AWS Glue
+
+### Glue 6.0 with the FLEX execution class
+
+Glue 6.0 runs Spark 4.1.1 on Python 3.13. Prices in Sydney, from the AWS Price
+List API:
+
+| Glue version | Standard | FLEX |
+|---|---|---|
+| 6.0 and later | $0.308 per DPU-hour | $0.203 per DPU-hour |
+| Earlier versions | $0.44 per DPU-hour | $0.29 per DPU-hour |
+
+FLEX runs on spare capacity, so a run can take longer to start. Nothing here
+is waiting on a load to the minute, so every job uses it.
+
+### Workers and auto scaling
+
+Each job uses G.1X workers (1 DPU: 4 vCPU, 16 GB) with auto scaling on, so
+`number_of_workers` is a ceiling, not a fixed size. That matters for this data
+because gzip cannot be split: the read stage of `clean_reviews` has exactly
+one task per source file (three in total), however many workers exist.
+Without auto scaling, every worker beyond the first would be billed while it
+waits for those three tasks. With it, Glue adds workers when the shuffle and
+write stages have many tasks queued, and releases them when idle.
+
+### Logic in plain PySpark, not Glue DynamicFrames
+
+The jobs use no Glue-specific API. The same file runs with `python` on a
+laptop and as a Glue job, and Glue's own arguments (`--JOB_NAME` and others)
+are ignored by `parse_known_args`. `allow_abbrev=False` stops argparse from
+treating an unknown Glue argument as an abbreviation of one of ours.
+
+Retries are off in Glue (`max_retries = 0`); the orchestrator in phase 3 owns
+retries, so it can see every attempt. Glue job bookmarks are off: idempotency
+comes from partition overwrite, which is explicit and covered by tests.
+
+### Least-privilege job role
+
+The Glue job role is written out rather than using the AWS managed
+`AWSGlueServiceRole`, which grants access to every bucket named `aws-glue-*`
+and more. The role can:
+
+- read the raw bucket;
+- read, write and delete in cleaned, curated and quarantine (delete is
+  needed because overwriting a partition removes its old files);
+- read job code from `artifacts/glue/`, and write only to
+  `artifacts/spark-logs/`, `artifacts/glue-temp/` and `artifacts/metrics/`;
+- write logs under `/aws-glue/*`.
+
+The trust policy only lets Glue assume the role on behalf of jobs in this
+account (`aws:SourceAccount` and `aws:SourceArn` conditions), which protects
+against the "confused deputy" problem.
+
+The three Glue log groups are created by Terraform with 14-day retention. If
+Glue created them on first run they would keep logs forever and survive
+`terraform destroy`.
+
+### Catalog tables defined in Terraform, not by a crawler
+
+A Glue crawler samples files and guesses the schema. It would have to guess
+that `review_month` is text rather than a date, it costs DPU time on every run,
+and its guess is not reviewed anywhere. The tables in `catalog.tf` are the
+schema the jobs write, kept in git next to the code that writes it.
+
+### Partition projection instead of registering partitions
+
+Without projection, every new partition folder has to be added to the catalog
+(by a crawler, `MSCK REPAIR TABLE`, or `ALTER TABLE ADD PARTITION`) before
+Athena can see it. With projection, the table properties tell Athena that
+`category` is one of a fixed list (read from `config/categories.json`) and
+`review_month` is any month from 1995-01 to now. A month the pipeline has just
+written is queryable at once, and a month with no data simply returns no rows.
+
+Projection is Athena-only: Spark and Redshift Spectrum ignore it. That is
+fine here, because the jobs read S3 paths directly and Redshift will load with
+`COPY`.
+
+### Athena workgroup with a per-query scan limit
+
+Athena charges $5 per TB scanned in Sydney. The `rrl` workgroup cancels any
+query that would scan more than 20 GiB (about $0.10), keeps results for 7
+days, and its settings cannot be overridden per query.
+
+### The join to products
+
+`build_curated` LEFT-joins cleaned reviews to cleaned products on
+(`category`, `parent_asin`):
+
+- **LEFT, not INNER:** a review whose product is missing from the metadata
+  is kept, with `has_product = false`. An inner join would silently remove
+  those reviews from every total. The count of such reviews is recorded on
+  each run as `reviews_without_product`.
+- **On category too:** products are de-duplicated per category. Joining on
+  `parent_asin` alone could match a review to the same product listed in two
+  categories, and count it twice.
+- **Without review text:** `title` and `text` are dropped before the join.
+  Parquet stores columns separately, so they are never even read from S3.
+- **Aggregates read the joined table back from Parquet** instead of
+  recomputing the join three times or caching it in memory.
+
+### Run metrics from the write itself
+
+Every job writes a JSON record per run: rows read, unparseable lines,
+duplicates removed, rows written, bytes in and out, and duration. The counts
+come from Spark's Observation API, which computes them while the data passes
+through the write. Counting separately would mean a second full read of the
+input, and for a 6 GB gzip file that cannot be split, that would nearly
+double the job's run time. These records are what the phase 7 benchmarks
+will report from.

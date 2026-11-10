@@ -35,8 +35,13 @@ The observed fields are in [schema.md](schema.md).
 reviews/category=<category>/review_month=<YYYY-MM>/part-*.zstd.parquet
 ```
 
+One row per review: copies with the same `category`, `user_id`,
+`parent_asin` and `timestamp` are reduced to one (docs/decisions.md,
+"De-duplication key").
+
 | Column | Type | From | Notes |
 |---|---|---|---|
+| `review_id` | string | `user_id`, `parent_asin`, `timestamp` | MD5 of the de-duplication key, 32 hex characters. Stable across runs. |
 | `user_id` | string | `user_id` | |
 | `asin` | string | `asin` | The variant that was reviewed. |
 | `parent_asin` | string | `parent_asin` | The product. Join key to `products`. |
@@ -61,6 +66,9 @@ checks in phase 5 will route such rows to quarantine instead.
 products/category=<category>/part-*.zstd.parquet
 ```
 
+One row per `category` and `parent_asin`. If a product appears more than
+once, the copy with the highest `rating_number` is kept.
+
 | Column | Type | From | Notes |
 |---|---|---|---|
 | `parent_asin` | string | `parent_asin` | |
@@ -79,7 +87,30 @@ Not carried over from raw: `images`, `videos`, `description`, `features`,
 
 ## curated
 
-All three tables are partitioned by `review_month` and share these measures:
+### `reviews_enriched/`
+
+```
+reviews_enriched/category=<category>/review_month=<YYYY-MM>/part-*.zstd.parquet
+```
+
+Every cleaned review, without `title` and `text`, LEFT-joined to its product
+on (`category`, `parent_asin`). A review whose product is not in the metadata
+is kept with `has_product = false` and NULL product columns.
+
+| Column | Type | Notes |
+|---|---|---|
+| `review_id` … `review_date` | | As in cleaned `reviews`, minus `title` and `text`. |
+| `has_product` | boolean | Whether the product was found in the metadata. |
+| `product_title` | string | Product `title`. |
+| `store` | string | |
+| `price` | double | |
+| `main_category` | string | |
+| `category`, `review_month` | string | Partition columns. |
+
+### Aggregates
+
+These three tables are built from `reviews_enriched`, are partitioned by
+`review_month`, and share these measures:
 
 | Column | Type | Meaning |
 |---|---|---|
@@ -92,10 +123,25 @@ All three tables are partitioned by `review_month` and share these measures:
 |---|---|---|---|
 | `category_monthly/` | category and month | `category`, `review_month` | Rating trends by category |
 | `category_daily/` | category and day | `category`, `review_date`, `review_month` | Review volume around sale periods |
-| `product_monthly/` | product and month | `category`, `parent_asin`, `review_month` | Products whose ratings are dropping |
+| `product_monthly/` | product and month | `category`, `parent_asin`, `product_title`, `store`, `review_month` | Products whose ratings are dropping |
 
 ```
 category_monthly/review_month=<YYYY-MM>/part-*.zstd.parquet
 category_daily/review_month=<YYYY-MM>/part-*.zstd.parquet
 product_monthly/review_month=<YYYY-MM>/part-*.zstd.parquet
 ```
+
+## Catalog
+
+Every table above is registered in the Glue Data Catalog by Terraform
+(`infra/terraform/catalog.tf`), in databases `rrl_raw`, `rrl_cleaned` and
+`rrl_curated`. Athena finds partitions through partition projection, so a
+newly written month is queryable without a crawler or `MSCK REPAIR TABLE`.
+`rrl_raw.reviews` and `rrl_raw.products` read the gzipped JSON directly.
+
+## Run metrics
+
+Each job run writes one JSON record to
+`<metrics>/job_name=<job>/run_id=<start time>/`: row counts collected during
+the write, bytes read and written, and duration. On AWS `<metrics>` is
+`s3://<artifacts>/metrics`.
