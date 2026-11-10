@@ -84,7 +84,7 @@ make test                 # unit tests, no AWS access needed
 make download-dry-run     # list source files and sizes, no AWS access needed
 
 cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
-# edit terraform.tfvars: set alert_email
+# edit terraform.tfvars: set aws_account_id and alert_email
 
 make tf-init
 make tf-plan              # review what will be created

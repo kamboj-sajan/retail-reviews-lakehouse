@@ -8,6 +8,11 @@ output "raw_bucket" {
   value       = aws_s3_bucket.lake["raw"].id
 }
 
+output "aws_region" {
+  description = "Region the buckets live in, passed to scripts/download_raw.py."
+  value       = var.aws_region
+}
+
 output "budget_name" {
   value = aws_budgets_budget.project.name
 }

@@ -26,7 +26,7 @@ download-dry-run: ## List the source files and their sizes (no AWS access needed
 	python3 scripts/download_raw.py --dry-run
 
 download: ## Copy the source files into the raw bucket (billable: S3 storage)
-	$(PY) scripts/download_raw.py --bucket $$($(TF) output -raw raw_bucket)
+	$(PY) scripts/download_raw.py --bucket $$($(TF) output -raw raw_bucket) --region $$($(TF) output -raw aws_region)
 
 tf-init: ## Download the Terraform providers
 	$(TF) init

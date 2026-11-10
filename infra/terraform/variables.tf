@@ -1,7 +1,17 @@
 variable "aws_region" {
-  description = "Region for every resource. Mumbai is closest to me."
+  description = "Region for every resource. The AWS account this project runs in is restricted to Sydney."
   type        = string
-  default     = "ap-south-1"
+  default     = "ap-southeast-2"
+}
+
+variable "aws_account_id" {
+  description = "The only AWS account Terraform may touch. Set it in terraform.tfvars."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
+    error_message = "aws_account_id must be a 12-digit account ID."
+  }
 }
 
 variable "project" {

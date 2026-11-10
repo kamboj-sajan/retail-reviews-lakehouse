@@ -203,6 +203,7 @@ def upload_file(s3, bucket, key, url, source, fetch=fetch_range, part_size=DEFAU
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bucket", help="raw-layer S3 bucket name (terraform output: raw_bucket)")
+    parser.add_argument("--region", help="region of the bucket (default: the region in your AWS config)")
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="path to categories.json")
     parser.add_argument("--only", action="append", help="limit to this category (repeatable)")
     parser.add_argument("--dry-run", action="store_true", help="only list files and sizes; no AWS calls")
@@ -237,7 +238,7 @@ def main():
         sys.exit("--bucket is required unless --dry-run is given")
 
     import boto3  # imported here so --dry-run works without boto3 installed
-    s3 = boto3.client("s3")
+    s3 = boto3.client("s3", region_name=args.region)
 
     manifest = {"started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "bucket": args.bucket, "files": []}
     for item in files:

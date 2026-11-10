@@ -20,6 +20,10 @@ terraform {
 provider "aws" {
   region = var.aws_region
 
+  # Safety catch: if the credentials in my shell belong to any other account,
+  # Terraform stops before planning instead of building (or destroying) there.
+  allowed_account_ids = [var.aws_account_id]
+
   # Every resource gets these tags, so the project's cost can be filtered in
   # Cost Explorer and nothing is left behind unnoticed after teardown.
   default_tags {

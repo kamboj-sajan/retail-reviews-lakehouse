@@ -7,6 +7,7 @@ infra/terraform/*.tfstate
 infra/terraform/*.tfstate.*
 infra/terraform/*.tfvars
 !infra/terraform/terraform.tfvars.example
+infra/terraform/*.tfplan
 infra/terraform/crash.log
 
 # Python

@@ -13,6 +13,15 @@ phase 6 needs. Video_Games is small, so it is the category every job is run on
 first. The category list lives in `config/categories.json`; adding one is a
 config change, not a code change.
 
+### Region: ap-southeast-2 (Sydney)
+
+The AWS account this project runs in is restricted to Sydney, so every
+resource lives there. The region is one Terraform variable (`aws_region`).
+
+Terraform is also told which account it may touch (`allowed_account_ids`). If
+the credentials in the shell belong to a different account, it stops before
+planning, so `apply` and `destroy` cannot hit the wrong account by accident.
+
 ### Terraform, not AWS CDK
 
 Both would work. Terraform is declarative: the files describe the end state,

@@ -1,3 +1,4 @@
 # Copy this file to terraform.tfvars (which is git-ignored) and fill it in.
+aws_account_id     = "123456789012"
 alert_email        = "you@example.com"
 monthly_budget_usd = 50
