@@ -572,3 +572,39 @@ month gives exactly the same result as the full load.
 
 Products are not replayed: product metadata has no date, and the cleaned
 products table from the backfill is used by every monthly run.
+
+### Two things that went wrong in phase 3, and what changed
+
+**`StringMatches` has only one wildcard.** The state machine first checked
+the month with `StringMatches = "????-??"`. In Step Functions, `*` is the only
+wildcard; `?` is a literal character. So every real month failed the check.
+It was caught by delivering a single month before the other eleven, and it cost
+no Glue time because the check runs before any Glue task. The check is now a
+loose one (a string containing `-`). The exact YYYY-MM check lives in the
+Glue jobs' `--month` argument, and a failure there is caught and alerted like
+any other.
+
+**A network outage made Terraform plan to destroy live buckets.** While a
+plan was refreshing state, DNS on the laptop stopped resolving AWS endpoints.
+The AWS provider reported three buckets, all holding data, as "deleted" and
+planned 24 creates and 21 destroys. The plan was incomplete, so Terraform
+refused to apply it, and the buckets were confirmed intact with `HeadBucket`.
+But a plan that was complete *and* wrong would have been applied, because
+plan and apply had been run in one command. Now:
+
+- `make tf-apply` saves the plan, runs `scripts/check_plan.py` on it, and
+  applies only that saved plan file;
+- `check_plan.py` refuses any plan that deletes or replaces a resource
+  unless `ALLOW_DESTROY=1` is set.
+
+`make destroy` is still the one intended way to remove everything.
+
+### Per-month cost is mostly fixed overhead
+
+The twelve monthly loads cost between $0.022 and $0.063 each, and the cost
+barely follows the data: 2023-09 (5,540 reviews) cost 75% as much as 2023-01
+(773,397 reviews). A small Glue run spends most of its billed time starting
+Spark and listing S3, on at least two workers. If loads became more frequent
+(daily, say), that overhead would dominate. The options would be fewer,
+larger loads, or a lighter engine for small months, such as Glue's Python
+shell jobs or Athena `INSERT INTO`.
