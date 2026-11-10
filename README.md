@@ -12,7 +12,7 @@ This project is being built in phases. The README describes only what exists.
 | Phase | What | State |
 |---|---|---|
 | 0 | Repo, Terraform skeleton, budget alarm, S3 buckets, download script | Done: buckets and budget alarm created, source files copied into the raw bucket |
-| 1 | Data lake layers: raw, cleaned, curated | Not started |
+| 1 | Data lake layers: raw, cleaned, curated | Layout defined; jobs pass on the local sample. Cleaned and curated are not yet written to S3 (that runs on Glue in phase 2) |
 | 2 | PySpark ETL on Glue, Glue Data Catalog | Not started |
 | 3 | Incremental monthly loads with Step Functions and EventBridge | Not started |
 | 4 | Redshift Serverless star schema | Not started |
@@ -62,27 +62,40 @@ in phase 2.
 ## Repository layout
 
 ```
-config/categories.json     which categories to load
-infra/terraform/           all AWS infrastructure
-scripts/download_raw.py    copies the source files into the raw S3 bucket
-scripts/sample_raw.py      saves a small local sample for development
-scripts/inspect_schema.py  profiles the real fields in the sample
-tests/                     unit tests (no AWS access needed)
-docs/schema.md             the schema observed in the real files
-docs/decisions.md          design decisions and trade-offs
+config/categories.json             which categories to load
+infra/terraform/                   all AWS infrastructure
+src/lakehouse/                     PySpark code shared by every job
+jobs/                              job entry points: clean_reviews, clean_products, build_curated
+scripts/download_raw.py            copies the source files into the raw S3 bucket
+scripts/sample_raw.py              saves a small local sample for development
+scripts/inspect_schema.py          profiles the real fields in the sample
+scripts/compare_parquet_codecs.py  measures Parquet size per compression codec
+tests/                             tests (no AWS access needed)
+docs/schema.md                     the schema observed in the real files
+docs/data-lake-layout.md           paths, columns and types of every layer
+docs/decisions.md                  design decisions and trade-offs
 ```
 
 ## Running it
 
-Requirements: Python 3.9+, Terraform 1.6+, and AWS credentials in your
-environment (for example from `aws configure`). No credentials are stored in
-this repository.
+Requirements: [uv](https://docs.astral.sh/uv/) (it installs Python 3.11, the
+version inside AWS Glue 5.1), Java 11 or 17 for Spark, Terraform 1.6+, and AWS
+credentials in your environment (for example from `aws configure`). No
+credentials are stored in this repository.
+
+Locally, with no AWS access:
 
 ```
-make venv                 # create .venv with boto3, pytest, moto
-make test                 # unit tests, no AWS access needed
-make download-dry-run     # list source files and sizes, no AWS access needed
+make venv                 # create .venv: Python 3.11, PySpark 3.5.6, boto3, pytest, moto
+make sample               # save the first 20,000 reviews and 5,000 products per category
+make test                 # all tests, including an end-to-end run on the sample
+make local-pipeline       # run every job on the sample, writing to data/local/
+make download-dry-run     # list source files and sizes
+```
 
+On AWS:
+
+```
 cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
 # edit terraform.tfvars: set aws_account_id and alert_email
 
