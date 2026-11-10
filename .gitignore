@@ -9,6 +9,8 @@ infra/terraform/*.tfvars
 !infra/terraform/terraform.tfvars.example
 infra/terraform/*.tfplan
 infra/terraform/crash.log
+# The zipped job code, rebuilt from src/ on every plan.
+infra/terraform/build/
 
 # Python
 .venv/
