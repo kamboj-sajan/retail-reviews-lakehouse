@@ -62,8 +62,11 @@ tf-init: ## Download the Terraform providers
 tf-plan: ## Show what Terraform would create
 	$(TF) plan
 
-tf-apply: ## Create the AWS resources (billable)
-	$(TF) apply
+tf-apply: ## Plan, refuse any delete/replace unless ALLOW_DESTROY=1, then apply that exact plan
+	$(TF) plan -input=false -out=tfplan
+	$(TF) show -json tfplan | $(PY) scripts/check_plan.py
+	$(TF) apply -input=false tfplan
+	rm -f infra/terraform/tfplan
 
 destroy: ## TEARDOWN: delete every AWS resource in this project, including all data
 	$(TF) destroy
