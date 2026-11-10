@@ -269,3 +269,72 @@ resource "aws_glue_catalog_table" "raw" {
     }
   }
 }
+
+# --- quarantine ----------------------------------------------------------------
+# Rows the cleaning jobs refused, with the reason. `record` is the row as JSON
+# text: the original line if it could not be parsed, otherwise its raw fields.
+
+resource "aws_glue_catalog_database" "quarantine" {
+  name        = "${var.bucket_prefix}_quarantine"
+  description = "${var.project}: rows rejected by the quality rules"
+}
+
+locals {
+  quarantine_tables = {
+    reviews  = ["category", "load_month"]
+    products = ["category"]
+  }
+}
+
+resource "aws_glue_catalog_table" "quarantine" {
+  for_each = local.quarantine_tables
+
+  database_name = aws_glue_catalog_database.quarantine.name
+  name          = each.key
+  table_type    = "EXTERNAL_TABLE"
+
+  # load_month is the month being loaded (or the row's own month in a
+  # backfill). A backfill row with no usable timestamp goes to
+  # load_month=unknown, which date projection cannot list; query that folder
+  # directly if a backfill ever produces one.
+  parameters = merge(
+    {
+      "classification"            = "parquet"
+      "projection.enabled"        = "true"
+      "storage.location.template" = join("/", concat(["s3://${local.bucket.quarantine}/${each.key}"], [for p in each.value : "${p}=$${${p}}"]))
+    },
+    local.category_projection,
+    contains(each.value, "load_month") ? {
+      "projection.load_month.type"          = "date"
+      "projection.load_month.format"        = "yyyy-MM"
+      "projection.load_month.range"         = "1995-01,NOW"
+      "projection.load_month.interval"      = "1"
+      "projection.load_month.interval.unit" = "MONTHS"
+    } : {},
+  )
+
+  dynamic "partition_keys" {
+    for_each = each.value
+    content {
+      name = partition_keys.value
+      type = "string"
+    }
+  }
+
+  storage_descriptor {
+    location      = "s3://${local.bucket.quarantine}/${each.key}"
+    input_format  = local.parquet_format.input_format
+    output_format = local.parquet_format.output_format
+    ser_de_info {
+      serialization_library = local.parquet_format.serde
+    }
+    columns {
+      name = "reason"
+      type = "string"
+    }
+    columns {
+      name = "record"
+      type = "string"
+    }
+  }
+}

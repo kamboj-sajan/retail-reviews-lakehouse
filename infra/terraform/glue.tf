@@ -38,6 +38,15 @@ locals {
       timeout_minutes     = 60
       max_concurrent_runs = 4
     }
+    check_quality = {
+      description = "data quality checks for one loaded month; fails the run if any check fails"
+      # Counts and a few aggregations over one month of Parquet: small work.
+      max_workers         = 4
+      execution_class     = "FLEX"
+      auto_scaling        = true
+      timeout_minutes     = 30
+      max_concurrent_runs = 4
+    }
     split_raw_by_month = {
       description = "run once: raw review files -> one gzip file per category and month (raw/feed)"
       # Three source files means three tasks, and no shuffle, so one executor
@@ -243,9 +252,12 @@ resource "aws_glue_job" "job" {
     "--job-language"   = "python"
     "--extra-py-files" = "s3://${local.artifacts.id}/${aws_s3_object.lakehouse_zip.key}"
 
-    "--raw_path"     = "s3://${aws_s3_bucket.lake["raw"].id}"
-    "--cleaned_path" = "s3://${aws_s3_bucket.lake["cleaned"].id}"
-    "--curated_path" = "s3://${aws_s3_bucket.lake["curated"].id}"
+    "--raw_path"        = "s3://${aws_s3_bucket.lake["raw"].id}"
+    "--cleaned_path"    = "s3://${aws_s3_bucket.lake["cleaned"].id}"
+    "--curated_path"    = "s3://${aws_s3_bucket.lake["curated"].id}"
+    "--quarantine_path" = "s3://${aws_s3_bucket.lake["quarantine"].id}"
+    # Read by check_quality only; the other jobs ignore it.
+    "--max_quarantine_rate" = "0.01"
     # One JSON record per run: row counts, bytes, duration (lakehouse/metrics.py).
     "--metrics_path" = "s3://${local.artifacts.id}/metrics"
 

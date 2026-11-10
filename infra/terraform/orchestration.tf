@@ -16,7 +16,7 @@
 locals {
   raw_bucket     = aws_s3_bucket.lake["raw"].id
   arrival_prefix = "landing/_arrived/"
-  monthly_jobs   = ["clean_reviews", "build_curated"]
+  monthly_jobs   = ["clean_reviews", "build_curated", "check_quality"]
   state_machine  = "${var.bucket_prefix}-monthly-load"
   glue_job_arns  = [for name in local.monthly_jobs : "arn:aws:glue:${var.aws_region}:${local.account_id}:job/${aws_glue_job.job[name].name}"]
   glue_task_retry = [
@@ -126,6 +126,26 @@ resource "aws_sfn_state_machine" "monthly_load" {
         ResultSelector = { "run_id.$" = "$.Id", "state.$" = "$.JobRunState" }
         ResultPath     = "$.build_curated"
         Retry          = local.glue_task_retry
+        Catch          = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "NotifyFailure" }]
+        Next           = "CheckQuality"
+      }
+      # The quality gate. If any check fails, the Glue run fails, this state
+      # fails, the alert goes out and nothing after it runs. Only "job busy" is
+      # retried here: a failed check gives the same answer the second time,
+      # so retrying it would only delay the alert.
+      CheckQuality = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::glue:startJobRun.sync"
+        Parameters = {
+          JobName = aws_glue_job.job["check_quality"].name
+          Arguments = {
+            "--month.$"  = "$.month"
+            "--raw_path" = "s3://${local.raw_bucket}/landing"
+          }
+        }
+        ResultSelector = { "run_id.$" = "$.Id", "state.$" = "$.JobRunState" }
+        ResultPath     = "$.check_quality"
+        Retry          = [local.glue_task_retry[0]]
         Catch          = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "NotifyFailure" }]
         Next           = "Loaded"
       }
