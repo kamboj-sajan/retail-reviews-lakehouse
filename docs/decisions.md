@@ -111,9 +111,12 @@ inconsistent. Here the schema is declared up front, so it would add nothing,
 and it only exists inside Glue, which would make the jobs impossible to run or
 test on a laptop.
 
-`requirements-dev.txt` pins `pyspark==3.5.6` on Python 3.11, the versions
-inside AWS Glue 5.1. One difference remains: the laptop runs Java 11 and Glue
-runs Java 17.
+`requirements-dev.txt` pins `pyspark==4.1.1` on Python 3.13 with Java 17, the
+versions inside AWS Glue 6.0. The project started on Glue 5.1 (Spark 3.5.6) and
+moved to 6.0 at the start of phase 2: in Sydney, 6.0 costs $0.308 per DPU-hour
+against $0.44 for earlier versions (AWS Price List API). Spark 4 turns ANSI SQL
+mode on by default, which makes invalid casts fail loudly instead of returning
+wrong values; every phase 1 test passed unchanged on it.
 
 ### Logic in functions, jobs as thin wrappers
 

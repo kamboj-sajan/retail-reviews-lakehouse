@@ -1,5 +1,6 @@
-"""Shared test setup: import paths and one SparkSession for the whole run."""
+"""Shared test setup: import paths, Java 17, and one SparkSession for the whole run."""
 import os
+import subprocess
 import sys
 
 import pytest
@@ -7,6 +8,22 @@ import pytest
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 for folder in ("scripts", "src", "jobs"):
     sys.path.insert(0, os.path.join(ROOT, folder))
+
+
+def _find_java_17():
+    """Spark 4 needs Java 17. Prefer one already registered with macOS, then Homebrew's."""
+    try:
+        # -F: fail when there is no Java 17, instead of quietly returning another version.
+        return subprocess.run(["/usr/libexec/java_home", "-F", "-v", "17"], capture_output=True, text=True,
+                              check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    brew = "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
+    return brew if os.path.isdir(brew) else None
+
+
+if "JAVA_HOME" not in os.environ and _find_java_17():
+    os.environ["JAVA_HOME"] = _find_java_17()
 
 
 @pytest.fixture(scope="session")

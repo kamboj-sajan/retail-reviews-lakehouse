@@ -6,13 +6,19 @@ SAMPLES := $(shell find data/sample/raw -name '*.jsonl.gz' 2>/dev/null | sort)
 SPARK   := PYTHONPATH=src $(PY)
 LOCAL   := data/local
 
+# Spark 4 (Glue 6.0) needs Java 17. Use one registered with macOS if present,
+# otherwise Homebrew's openjdk@17. An explicit JAVA_HOME always wins.
+# -F matters: without it, java_home quietly returns another version (11).
+JAVA_HOME ?= $(shell /usr/libexec/java_home -F -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home)
+export JAVA_HOME
+
 .PHONY: help venv test sample schema local-pipeline download-dry-run download tf-init tf-plan tf-apply destroy
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
 
-venv: ## Create .venv (Python 3.11, same as Glue 5.1) and install the tools; needs uv
-	uv venv --python 3.11 .venv
+venv: ## Create .venv (Python 3.13, same as Glue 6.0) and install the tools; needs uv
+	uv venv --python 3.13 .venv
 	uv pip install --python $(PY) -r requirements-dev.txt
 
 test: ## Run all tests (no AWS access needed; uses data/sample if present)

@@ -78,15 +78,15 @@ docs/decisions.md                  design decisions and trade-offs
 
 ## Running it
 
-Requirements: [uv](https://docs.astral.sh/uv/) (it installs Python 3.11, the
-version inside AWS Glue 5.1), Java 11 or 17 for Spark, Terraform 1.6+, and AWS
+Requirements: [uv](https://docs.astral.sh/uv/) (it installs Python 3.13, the
+version inside AWS Glue 6.0), Java 17 for Spark 4, Terraform 1.6+, and AWS
 credentials in your environment (for example from `aws configure`). No
 credentials are stored in this repository.
 
 Locally, with no AWS access:
 
 ```
-make venv                 # create .venv: Python 3.11, PySpark 3.5.6, boto3, pytest, moto
+make venv                 # create .venv: Python 3.13, PySpark 4.1.1, boto3, pytest, moto
 make sample               # save the first 20,000 reviews and 5,000 products per category
 make test                 # all tests, including an end-to-end run on the sample
 make local-pipeline       # run every job on the sample, writing to data/local/

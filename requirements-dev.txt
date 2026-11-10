@@ -1,9 +1,9 @@
 # Tools for running the jobs, scripts and tests on a laptop.
-# Use Python 3.11: that is the Python version inside AWS Glue 5.1.
+# Use Python 3.13 and Java 17: the versions inside AWS Glue 6.0.
 
-# Pinned to the exact Spark version of AWS Glue 5.1, so a job that passes
+# Pinned to the exact Spark version of AWS Glue 6.0, so a job that passes
 # locally runs on the same Spark on Glue.
-pyspark==3.5.6
+pyspark==4.1.1
 
 boto3>=1.35
 pytest>=8.0
