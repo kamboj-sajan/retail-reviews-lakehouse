@@ -18,6 +18,108 @@ REVIEW_KEY = ["user_id", "parent_asin", "timestamp"]
 PRODUCT_KEY = ["category", "parent_asin"]
 
 # ---------------------------------------------------------------------------
+# quarantine rules
+#
+# A raw row that breaks a rule is not loaded. It goes to the quarantine
+# bucket with the reason, so it can be counted, inspected and, once the cause
+# is fixed, replayed. Rules are checked in this order; a row gets the first
+# reason that applies.
+# ---------------------------------------------------------------------------
+
+# 2100-01-01 UTC in milliseconds. A later (or negative) timestamp is a corrupt
+# value, and converting it to a date would overflow.
+MAX_TIMESTAMP_MS = 4_102_444_800_000
+
+REVIEW_PROBLEMS = [
+    "unparseable_json",         # the line is not valid JSON, or a field has the wrong type
+    "missing_key",              # user_id, parent_asin or timestamp is missing
+    "timestamp_out_of_range",   # before 1970 or after 2099
+    "rating_not_whole_number",  # missing, or not 1.0, 2.0, ... (4.5 is not a star rating)
+    "rating_out_of_range",      # a whole number, but not 1 to 5 (the real data has two 0s)
+    "outside_month",            # monthly runs only: the timestamp is in another month
+]
+PRODUCT_PROBLEMS = ["unparseable_json", "missing_key"]
+
+RAW_REVIEW_FIELDS = ["user_id", "asin", "parent_asin", "rating", "title", "text",
+                     "timestamp", "helpful_vote", "verified_purchase", "images"]
+RAW_PRODUCT_FIELDS = ["parent_asin", "title", "main_category", "store", "price",
+                      "average_rating", "rating_number", "categories", "details"]
+
+
+def _month_of(timestamp_ms):
+    return F.date_format(F.timestamp_millis(timestamp_ms), "yyyy-MM")
+
+
+def review_problem(month=None):
+    """Column: why a raw review row cannot be loaded, or NULL if it can."""
+    ts, rating = F.col("timestamp"), F.col("rating")
+    problem = (
+        F.when(F.col(CORRUPT_COLUMN).isNotNull(), F.lit("unparseable_json"))
+        .when(F.col("user_id").isNull() | F.col("parent_asin").isNull() | ts.isNull(), F.lit("missing_key"))
+        .when((ts < 0) | (ts > MAX_TIMESTAMP_MS), F.lit("timestamp_out_of_range"))
+        .when(rating.isNull() | (rating != F.round(rating)), F.lit("rating_not_whole_number"))
+        .when((rating < 1) | (rating > 5), F.lit("rating_out_of_range"))
+    )
+    if month:
+        # Without this rule, one stray row would make dynamic partition
+        # overwrite replace another month with just that row.
+        problem = problem.when(_month_of(ts) != F.lit(month), F.lit("outside_month"))
+    return problem
+
+
+def split_reviews(raw, month=None):
+    """raw review rows -> (rows to load, rows to quarantine).
+
+    Quarantined rows keep the record as JSON text: the original line when it
+    could not be parsed, otherwise the parsed raw fields (before any type
+    conversion, so a rating of 4.5 is still visible as 4.5).
+
+    load_month is the quarantine partition: the month being loaded in a
+    monthly run, so a re-run of that month replaces exactly its quarantine
+    rows; in a backfill, the row's own month, or "unknown" without one.
+    """
+    classified = raw.withColumn("_problem", review_problem(month))
+    loadable = classified.where(F.col("_problem").isNull()).drop("_problem")
+
+    ts = F.col("timestamp")
+    if month:
+        load_month = F.lit(month)
+    else:
+        valid_ts = ts.isNotNull() & (ts >= 0) & (ts <= MAX_TIMESTAMP_MS)
+        load_month = F.when(valid_ts, _month_of(ts)).otherwise(F.lit("unknown"))
+    quarantined = classified.where(F.col("_problem").isNotNull()).select(
+        F.col("_problem").alias("reason"),
+        F.coalesce(F.col(CORRUPT_COLUMN), F.to_json(F.struct(*RAW_REVIEW_FIELDS))).alias("record"),
+        "category",
+        load_month.alias("load_month"),
+    )
+    return loadable, quarantined
+
+
+def split_products(raw):
+    """raw product rows -> (rows to load, rows to quarantine)."""
+    problem = (
+        F.when(F.col(CORRUPT_COLUMN).isNotNull(), F.lit("unparseable_json"))
+        .when(F.col("parent_asin").isNull(), F.lit("missing_key"))
+    )
+    classified = raw.withColumn("_problem", problem)
+    loadable = classified.where(F.col("_problem").isNull()).drop("_problem")
+    quarantined = classified.where(F.col("_problem").isNotNull()).select(
+        F.col("_problem").alias("reason"),
+        F.coalesce(F.col(CORRUPT_COLUMN), F.to_json(F.struct(*RAW_PRODUCT_FIELDS))).alias("record"),
+        "category",
+    )
+    return loadable, quarantined
+
+
+def count_by_reason(reasons, prefix="quarantined_"):
+    """Observation aggregates: one count per quarantine reason, plus the total."""
+    counts = {f"{prefix}{r}": F.count(F.when(F.col("reason") == r, 1)) for r in reasons}
+    counts[f"{prefix}rows"] = F.count(F.lit(1))
+    return counts
+
+
+# ---------------------------------------------------------------------------
 # raw -> cleaned: reviews
 # ---------------------------------------------------------------------------
 

@@ -43,8 +43,8 @@ def test_jobs_on_sample(spark, tmp_path):
     curated_path = str(tmp_path / "curated")
     metrics_path = str(tmp_path / "metrics")
 
-    clean_reviews.main(["--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path, "--metrics_path", metrics_path])
-    clean_products.main(["--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path, "--metrics_path", metrics_path])
+    clean_reviews.main(["--quarantine_path", str(tmp_path / "quarantine"), "--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path, "--metrics_path", metrics_path])
+    clean_products.main(["--quarantine_path", str(tmp_path / "quarantine"), "--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path, "--metrics_path", metrics_path])
     build_curated.main(["--cleaned_path", cleaned_path, "--curated_path", curated_path, "--metrics_path", metrics_path])
 
     review_lines, distinct_reviews = plain_python_counts("reviews", ["user_id", "parent_asin", "timestamp"])
@@ -68,24 +68,24 @@ def test_jobs_on_sample(spark, tmp_path):
     # The metrics records agree with the independent counts.
     metrics = {r["job"]: r for r in spark.read.json(metrics_path).collect()}
     assert metrics["clean_reviews"]["raw_lines"] == review_lines
-    assert metrics["clean_reviews"]["corrupt_lines"] == 0
+    assert metrics["clean_reviews"]["quarantined_rows"] == 0
     assert metrics["clean_reviews"]["duplicate_rows_removed"] == review_lines - distinct_reviews
     assert metrics["clean_products"]["written_rows"] == distinct_products
     assert metrics["build_curated"]["reviews_enriched_rows"] == distinct_reviews
 
     # Running a job a second time changes nothing.
-    clean_reviews.main(["--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path])
+    clean_reviews.main(["--quarantine_path", str(tmp_path / "quarantine"), "--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path])
     assert spark.read.parquet(f"{cleaned_path}/reviews").count() == distinct_reviews
 
 
 def test_one_category_run_leaves_the_others_alone(spark, tmp_path):
     cleaned_path = str(tmp_path / "cleaned")
     metrics_path = str(tmp_path / "metrics")
-    clean_reviews.main(["--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path])
+    clean_reviews.main(["--quarantine_path", str(tmp_path / "quarantine"), "--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path])
     others_before = sorted(glob.glob(f"{cleaned_path}/reviews/category=Electronics/*/*.parquet"))
     total_before = spark.read.parquet(f"{cleaned_path}/reviews").count()
 
-    clean_reviews.main(["--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path,
+    clean_reviews.main(["--quarantine_path", str(tmp_path / "quarantine"), "--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path,
                         "--metrics_path", metrics_path, "--categories", "Video_Games"])
 
     assert spark.read.parquet(f"{cleaned_path}/reviews").count() == total_before

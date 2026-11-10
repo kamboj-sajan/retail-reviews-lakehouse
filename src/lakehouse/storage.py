@@ -67,6 +67,30 @@ def read_table(spark, table_path, month=None, by_category=True):
     return spark.read.option("basePath", table_path).parquet(pattern)
 
 
+def delete_paths(spark, pattern):
+    """Delete every file or folder matching a glob pattern, local or on S3. Returns how many."""
+    jvm = spark.sparkContext._jvm
+    hadoop_path = jvm.org.apache.hadoop.fs.Path(pattern)
+    fs = hadoop_path.getFileSystem(spark.sparkContext._jsc.hadoopConfiguration())
+    matches = fs.globStatus(hadoop_path) or []
+    for match in matches:
+        fs.delete(match.getPath(), True)
+    return len(matches)
+
+
+def write_quarantine(spark, df, path, partition_columns, clear_patterns):
+    """Replace this run's quarantine rows.
+
+    Dynamic partition overwrite only replaces partitions that appear in the
+    data. A re-run that finds no bad rows would therefore leave the previous
+    run's quarantine rows in place, and they would be counted twice. So the
+    partitions this run is responsible for are deleted first.
+    """
+    for pattern in clear_patterns:
+        delete_paths(spark, pattern)
+    df.write.mode("overwrite").partitionBy(*partition_columns).parquet(path)
+
+
 def parse_categories(text):
     """'A,B' -> ['A', 'B']; empty or None -> None (meaning every category)."""
     return [c.strip() for c in text.split(",") if c.strip()] if text else None

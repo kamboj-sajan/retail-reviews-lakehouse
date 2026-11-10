@@ -85,8 +85,8 @@ def test_running_one_month_twice_changes_nothing(spark, tmp_path):
     split_raw_by_month.main(["--raw_path", SAMPLE_RAW, "--feed_path", feed])
 
     # History first: the full backfill, exactly as in phase 2.
-    clean_reviews.main(["--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned])
-    clean_products.main(["--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned])
+    clean_reviews.main(["--quarantine_path", str(tmp_path / "quarantine"), "--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned])
+    clean_products.main(["--quarantine_path", str(tmp_path / "quarantine"), "--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned])
     build_curated.main(["--cleaned_path", cleaned, "--curated_path", curated])
     reviews = spark.read.parquet(f"{cleaned}/reviews")
     month = reviews.groupBy("review_month").count().orderBy("count", ascending=False).first()["review_month"]
@@ -105,7 +105,7 @@ def test_running_one_month_twice_changes_nothing(spark, tmp_path):
     before = snapshot()
     deliver(feed, landing, month)
     for _ in range(2):  # the same month, twice
-        clean_reviews.main(["--raw_path", landing, "--cleaned_path", cleaned, "--month", month])
+        clean_reviews.main(["--quarantine_path", str(tmp_path / "quarantine"), "--raw_path", landing, "--cleaned_path", cleaned, "--month", month])
         build_curated.main(["--cleaned_path", cleaned, "--curated_path", curated, "--month", month])
         assert snapshot() == before
 
@@ -123,10 +123,13 @@ def test_a_row_from_another_month_is_never_written(spark, tmp_path):
     with gzip.open(f"{folder}/part.txt.gz", "wt") as handle:
         handle.write(json.dumps(january) + "\n" + json.dumps(stray_from_february) + "\n")
 
-    clean_reviews.main(["--raw_path", landing, "--cleaned_path", cleaned, "--metrics_path", metrics, "--month", "2023-01"])
+    clean_reviews.main(["--quarantine_path", str(tmp_path / "quarantine"), "--raw_path", landing, "--cleaned_path", cleaned, "--metrics_path", metrics, "--month", "2023-01"])
 
     written = spark.read.parquet(f"{cleaned}/reviews")
     assert [r["review_month"] for r in written.collect()] == ["2023-01"]
     assert not glob.glob(f"{cleaned}/reviews/category=Video_Games/review_month=2023-02")
     record = spark.read.json(metrics).first()
-    assert record["rows_outside_month"] == 1 and record["written_rows"] == 1 and record["month"] == "2023-01"
+    assert record["quarantined_outside_month"] == 1 and record["written_rows"] == 1 and record["month"] == "2023-01"
+    stray = spark.read.parquet(str(tmp_path / "quarantine" / "reviews")).collect()
+    assert [(r["reason"], r["load_month"], json.loads(r["record"])["user_id"]) for r in stray] == [
+        ("outside_month", "2023-01", "u2")]
