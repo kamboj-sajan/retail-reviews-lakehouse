@@ -608,3 +608,73 @@ Spark and listing S3, on at least two workers. If loads became more frequent
 (daily, say), that overhead would dominate. The options would be fewer,
 larger loads, or a lighter engine for small months, such as Glue's Python
 shell jobs or Athena `INSERT INTO`.
+
+## Phase 5: data quality
+
+### Two layers of defence: quarantine rules, then a gate
+
+1. **Row rules, while cleaning.** `split_reviews` gives every raw row either
+   no problem or one reason, checked in this order: `unparseable_json`,
+   `missing_key`, `timestamp_out_of_range`, `rating_not_whole_number`,
+   `rating_out_of_range`, and (monthly runs) `outside_month`. Rows with a
+   reason are written to the quarantine bucket with that reason and the
+   record as JSON text, and counted per reason in the run's metrics. They
+   are never loaded and never silently dropped.
+2. **Table checks, after curating.** `check_quality` measures the loaded
+   month and fails the run if anything is off:
+   - reconciliation across layers: landing lines = cleaned + quarantined +
+     duplicate copies removed; cleaned = enriched = the `review_count` total
+     of each aggregate table;
+   - no NULL in key columns;
+   - no duplicate `review_id`, and no duplicate review key;
+   - every rating from 1 to 5;
+   - quarantine rate at most 1% of the month's lines.
+
+The rules make bad rows impossible to load. The checks prove the rules
+worked, and catch what rules cannot see: a partial write, a lost file, a
+duplicate introduced by a bug.
+
+### Why the quarantine-rate limit
+
+Quarantining a handful of bad rows is the system working. A month where many
+rows fail means the source changed or broke, and loading the rows that
+passed would publish a partial month that looks complete. 1% is far above
+anything the real data produced, and low enough to catch a broken feed.
+It is a job argument (`--max_quarantine_rate`), not a constant in code.
+
+### Independent counts, except one
+
+The checks count landing lines, quarantined rows, cleaned rows and curated
+totals themselves, from storage, rather than trusting the numbers the
+writing jobs reported. The one figure taken from `clean_reviews`' metrics
+record is the number of duplicate copies removed: recomputing it would mean
+re-running the de-duplication.
+
+### The gate stops what comes after it, not what came before
+
+`check_quality` runs after `build_curated`, so a failing month has already
+replaced its cleaned and curated partitions by the time the gate fails. Those
+partitions are still correct: bad rows went to quarantine, not into them.
+What the gate protects is everything downstream: the Redshift load (phase 4)
+will be the step after `CheckQuality`, so a failing month never reaches the
+warehouse or the dashboard.
+
+The stricter design is **write-audit-publish**: write the month to a staging
+location, check it there, and only then swap it into the lake. It would keep
+even the lake untouched by a bad month, at the cost of a second write. With
+quarantine already removing bad rows from the lake, gating the warehouse was
+enough here.
+
+### Re-runs replace the month's quarantine too
+
+Dynamic partition overwrite only replaces partitions that appear in the new
+data. A re-run that finds no bad rows writes no quarantine partition, so the
+previous run's quarantine rows would survive and be counted again. Before
+writing, `write_quarantine` deletes the partitions the run is responsible
+for (`category=*/load_month=<month>` in a monthly run).
+
+### Retry policy for the gate
+
+`CheckQuality` retries only `Glue.ConcurrentRunsExceededException` (the job
+is busy). A failed check is deterministic, the same data gives the same
+answer, so retrying it would only delay the alert.

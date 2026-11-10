@@ -47,6 +47,9 @@ replay: ## Deliver months and wait for the loads they trigger, e.g. make replay 
 idempotency-test: ## Load one month twice through Step Functions and compare counts, e.g. MONTH=2023-01
 	$(PY) scripts/test_month_idempotency.py $(MONTH) --state-machine $(STATE_MACHINE) --cleaned $(call BUCKET,cleaned) --curated $(call BUCKET,curated)
 
+fault-injection-test: ## Inject bad rows into a month, prove quarantine and the quality gate work, clean up (MONTH=2023-09)
+	$(PY) scripts/fault_injection_test.py --raw $(call BUCKET,raw) --artifacts $(call BUCKET,artifacts) --state-machine $(STATE_MACHINE) --month $(or $(MONTH),2023-09)
+
 reset-months: ## List (or with YES=1 delete) months FROM..TO from cleaned, curated and landing
 	$(PY) scripts/reset_months.py --raw $(call BUCKET,raw) --cleaned $(call BUCKET,cleaned) --curated $(call BUCKET,curated) --from $(FROM) --to $(TO) $(if $(YES),--yes)
 
