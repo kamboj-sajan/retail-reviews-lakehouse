@@ -459,3 +459,116 @@ Two lessons:
 
 So phase 3 pays the gzip cost once: a one-time job splits the raw files into
 monthly pieces, and every monthly run reads small, separate files.
+
+## Phase 3: incremental monthly loads
+
+### How a month "arrives"
+
+The dataset is static, so arrival is simulated in three steps:
+
+1. **Once:** the Glue job `split_raw_by_month` reads every raw review line
+   and writes it, byte for byte, to
+   `raw/feed/reviews/category=<c>/review_month=<YYYY-MM>/`. This plays the
+   upstream system's monthly exports.
+2. **Per month:** `scripts/replay_month.py <month>` copies that month's
+   files into `raw/landing/reviews/...`, then writes a marker object
+   `raw/landing/_arrived/<month>`.
+3. S3 sends the marker's "Object Created" event to EventBridge. A rule that
+   matches only keys under `landing/_arrived/` starts the state machine.
+
+The marker is written last, so the load never starts on a half-copied month.
+And because there is one marker per month, there is one execution per month,
+not one per data file (three categories would otherwise mean three
+executions racing to load the same month).
+
+The original downloads in the raw bucket are never modified; `feed/` and
+`landing/` sit beside them.
+
+### Why split once instead of reading the raw files each month
+
+A monthly run that read the original files would decompress the whole 6.47 GB
+Electronics stream, 25 minutes in one task, to keep about 1/300th of it.
+Splitting pays that cost once. After that, a month is about 1/300th of the
+data, in three small files.
+
+The split job has no shuffle: each raw file is read by one task, and that task
+writes each line straight into its month's file. Spark normally sorts a
+task's rows by the partition columns before a partitioned write, which for a
+30 GB decompressed stream means spilling to disk. Instead the job keeps one
+open writer per month (`spark.sql.maxConcurrentOutputFileWriters`) and turns
+off planned writes, which would add the sort back.
+
+It runs on STANDARD, not FLEX. With no shuffle, losing a worker means its
+task restarts from byte 0 of a 25-minute read. FLEX is a third cheaper per
+DPU-hour; one restart would cost more than that saving.
+
+### The state machine
+
+```
+HasMonth? ──no──> MonthFromArrivalKey ──┐
+    │yes                                 v
+    └───────────────────────────> CheckMonth ──bad──> BadMonth ──┐
+                                         │ok                      │
+                                         v                        │
+                     CleanReviews (Glue .sync, retries) ──fail──> │
+                                         v                        v
+                     BuildCurated (Glue .sync, retries) ──fail──> NotifyFailure (SNS) ──> LoadFailed
+                                         v
+                                       Loaded
+```
+
+- **Input:** either `{"month": "2023-01"}` (manual runs and the
+  idempotency test) or `{"key": "landing/_arrived/2023-01"}` (EventBridge).
+  The month is taken from the key with intrinsic functions, so no Lambda is
+  needed.
+- **`.sync` Glue tasks:** Step Functions starts the Glue run and waits for
+  it, so a failed Glue run becomes a failed state that can be retried or
+  caught.
+- **Two kinds of retry:**
+  - `Glue.ConcurrentRunsExceededException`: another month is still using
+    the job, which allows one run at a time. Retried every minute, up to 20
+    times. This is how two months that arrive together are put in order.
+  - `States.TaskFailed`: the Glue run failed. It is retried once after two
+    minutes (a lost FLEX worker is the expected cause). A second failure is
+    real.
+- **Failure notification:** any error is caught and goes to an SNS email
+  with the month, the error and the execution ID; the execution then ends
+  as failed. The run itself is not hidden by the alert.
+- **Logs:** execution history is written to CloudWatch Logs with 14-day
+  retention.
+
+Glue's own retries stay off (`max_retries = 0`), so every attempt is visible
+in one place, the execution history.
+
+### Why a re-run cannot create duplicates
+
+Three properties together:
+
+1. **Every write replaces whole partitions** (dynamic partition overwrite),
+   and every table is partitioned by month. Writing month M replaces month
+   M's folders and nothing else.
+2. **The run refuses rows from other months.** `clean_reviews --month M`
+   drops (and counts as `rows_outside_month`) any row whose timestamp is not
+   in M. Otherwise one stray row would make the overwrite replace another
+   month with just that row.
+3. **De-duplication is complete within a month.** The de-duplication key
+   includes the timestamp, so every copy of a review is in the same month.
+
+Running a month twice therefore writes the same files with the same rows.
+The test for this exists twice: locally on the sample
+(`tests/test_incremental.py`), and on AWS through the real state machine
+(`scripts/test_month_idempotency.py`).
+
+### What the replay delivers
+
+The backfill (phase 2) loaded every month. For the replay, the twelve most
+recent months, 2022-10 to 2023-09, are deleted from cleaned and curated
+(`scripts/reset_months.py`) and delivered again one at a time. That window
+includes Black Friday and the December holidays, which the dashboard needs.
+After the replay, the per-month counts must equal the backfill's
+(`sql/checks/window_counts.sql`, saved before the reset in
+`benchmarks/window_counts_backfill.txt`). That checks that loading month by
+month gives exactly the same result as the full load.
+
+Products are not replayed: product metadata has no date, and the cleaned
+products table from the backfill is used by every monthly run.

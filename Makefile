@@ -12,7 +12,7 @@ LOCAL   := data/local
 JAVA_HOME ?= $(shell /usr/libexec/java_home -F -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home)
 export JAVA_HOME
 
-.PHONY: help venv test sample schema local-pipeline glue-run download-dry-run download tf-init tf-plan tf-apply destroy
+.PHONY: help venv test sample schema local-pipeline glue-run replay idempotency-test reset-months download-dry-run download tf-init tf-plan tf-apply destroy
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -37,6 +37,18 @@ local-pipeline: ## Run every job on the local sample, writing to data/local/
 
 glue-run: ## Run a Glue job and report its cost (billable), e.g. make glue-run JOB=rrl-clean-reviews ARGS="--arg categories=Video_Games"
 	$(PY) scripts/run_glue_job.py $(JOB) $(ARGS)
+
+BUCKET = $$($(TF) output -json buckets | $(PY) -c "import json,sys; print(json.load(sys.stdin)['$(1)'])")
+STATE_MACHINE = $$($(TF) output -raw monthly_load_state_machine)
+
+replay: ## Deliver months and wait for the loads they trigger, e.g. make replay MONTHS="2022-10 2022-11"
+	$(PY) scripts/replay_month.py $(MONTHS) --bucket $(call BUCKET,raw) --state-machine $(STATE_MACHINE) --wait
+
+idempotency-test: ## Load one month twice through Step Functions and compare counts, e.g. MONTH=2023-01
+	$(PY) scripts/test_month_idempotency.py $(MONTH) --state-machine $(STATE_MACHINE) --cleaned $(call BUCKET,cleaned) --curated $(call BUCKET,curated)
+
+reset-months: ## List (or with YES=1 delete) months FROM..TO from cleaned, curated and landing
+	$(PY) scripts/reset_months.py --raw $(call BUCKET,raw) --cleaned $(call BUCKET,cleaned) --curated $(call BUCKET,curated) --from $(FROM) --to $(TO) $(if $(YES),--yes)
 
 download-dry-run: ## List the source files and their sizes (no AWS access needed)
 	python3 scripts/download_raw.py --dry-run

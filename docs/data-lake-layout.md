@@ -27,6 +27,15 @@ _manifests/download-<timestamp>.json
 
 The observed fields are in [schema.md](schema.md).
 
+Two more areas in the raw bucket support the monthly replay (phase 3). Both
+hold review lines exactly as downloaded, just grouped by month:
+
+```
+feed/reviews/category=<category>/review_month=<YYYY-MM>/part-*.txt.gz     written once by split_raw_by_month
+landing/reviews/category=<category>/review_month=<YYYY-MM>/part-*.txt.gz  a month copied here = the month has arrived
+landing/_arrived/<YYYY-MM>                                                marker written after a month's files; triggers the load
+```
+
 ## cleaned
 
 ### `reviews/`
