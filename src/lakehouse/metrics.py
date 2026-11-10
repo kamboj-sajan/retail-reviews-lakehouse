@@ -19,13 +19,23 @@ from pyspark.sql import Observation
 def path_bytes(spark, path):
     """Total size in bytes of every file under path, local or on S3.
 
-    Uses Hadoop's FileSystem API inside Spark's JVM, so the same call works for
-    a local folder and an s3:// prefix without needing boto3.
+    path may contain a glob such as category=*/review_month=2023-01. Uses
+    Hadoop's FileSystem API inside Spark's JVM, so the same call works for a
+    local folder and an s3:// prefix without needing boto3.
     """
     jvm = spark.sparkContext._jvm
     hadoop_path = jvm.org.apache.hadoop.fs.Path(path)
     fs = hadoop_path.getFileSystem(spark.sparkContext._jsc.hadoopConfiguration())
-    return int(fs.getContentSummary(hadoop_path).getLength())
+    matches = fs.globStatus(hadoop_path) or []
+    return int(sum(fs.getContentSummary(m.getPath()).getLength() for m in matches))
+
+
+def path_count(spark, pattern):
+    """Number of files or folders matching a glob pattern, local or on S3."""
+    jvm = spark.sparkContext._jvm
+    hadoop_path = jvm.org.apache.hadoop.fs.Path(pattern)
+    fs = hadoop_path.getFileSystem(spark.sparkContext._jsc.hadoopConfiguration())
+    return len(fs.globStatus(hadoop_path) or [])
 
 
 class JobRun:

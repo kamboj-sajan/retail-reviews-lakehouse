@@ -76,3 +76,24 @@ def test_jobs_on_sample(spark, tmp_path):
     # Running a job a second time changes nothing.
     clean_reviews.main(["--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path])
     assert spark.read.parquet(f"{cleaned_path}/reviews").count() == distinct_reviews
+
+
+def test_one_category_run_leaves_the_others_alone(spark, tmp_path):
+    cleaned_path = str(tmp_path / "cleaned")
+    metrics_path = str(tmp_path / "metrics")
+    clean_reviews.main(["--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path])
+    others_before = sorted(glob.glob(f"{cleaned_path}/reviews/category=Electronics/*/*.parquet"))
+    total_before = spark.read.parquet(f"{cleaned_path}/reviews").count()
+
+    clean_reviews.main(["--raw_path", SAMPLE_RAW, "--cleaned_path", cleaned_path,
+                        "--metrics_path", metrics_path, "--categories", "Video_Games"])
+
+    assert spark.read.parquet(f"{cleaned_path}/reviews").count() == total_before
+    assert sorted(glob.glob(f"{cleaned_path}/reviews/category=Electronics/*/*.parquet")) == others_before
+
+    # The run's metrics describe Video_Games only.
+    record = spark.read.json(metrics_path).first()
+    video_games = spark.read.parquet(f"{cleaned_path}/reviews").where("category = 'Video_Games'").count()
+    assert record["categories"] == "Video_Games"
+    assert record["written_rows"] == video_games
+    assert record["duplicate_rows_removed"] >= 0
