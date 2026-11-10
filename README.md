@@ -11,7 +11,7 @@ This project is being built in phases. The README describes only what exists.
 
 | Phase | What | State |
 |---|---|---|
-| 0 | Repo, Terraform skeleton, budget alarm, S3 buckets, download script | Code written and tested locally; not yet applied to AWS |
+| 0 | Repo, Terraform skeleton, budget alarm, S3 buckets, download script | Done: buckets and budget alarm created, source files copied into the raw bucket |
 | 1 | Data lake layers: raw, cleaned, curated | Not started |
 | 2 | PySpark ETL on Glue, Glue Data Catalog | Not started |
 | 3 | Incremental monthly loads with Step Functions and EventBridge | Not started |
