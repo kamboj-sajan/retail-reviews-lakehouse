@@ -77,9 +77,18 @@ resource "aws_sfn_state_machine" "monthly_load" {
         Parameters = { "month.$" = "States.ArrayGetItem(States.StringSplit($.key, '/'), 2)" }
         Next       = "CheckMonth"
       }
+      # A first, loose check. StringMatches only understands "*" as a
+      # wildcard (not "?"), so it cannot express YYYY-MM exactly; the Glue
+      # jobs check the exact format (--month) and fail on anything else.
       CheckMonth = {
-        Type    = "Choice"
-        Choices = [{ Variable = "$.month", StringMatches = "????-??", Next = "CleanReviews" }]
+        Type = "Choice"
+        Choices = [{
+          And = [
+            { Variable = "$.month", IsString = true },
+            { Variable = "$.month", StringMatches = "*-*" },
+          ]
+          Next = "CleanReviews"
+        }]
         Default = "BadMonth"
       }
       BadMonth = {
