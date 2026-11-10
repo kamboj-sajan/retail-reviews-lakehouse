@@ -367,3 +367,95 @@ through the write. Counting separately would mean a second full read of the
 input, and for a 6 GB gzip file that cannot be split, that would nearly
 double the job's run time. These records are what the phase 7 benchmarks
 will report from.
+
+### De-duplication key: (category, user_id, parent_asin, timestamp)
+
+About 1.1% of review lines in the raw files are repeats. The key was chosen by
+measuring every candidate over all 64,771,965 raw reviews in Athena.
+
+```
+$ python scripts/run_athena_query.py sql/analysis/duplicate_keys.sql
+category        unreadable_lines  review_rows  beyond_first_every_field  beyond_first_user_asin_time  beyond_first_user_product_time  beyond_first_user_time  beyond_first_user_product
+--------------  ----------------  -----------  ------------------------  ---------------------------  ------------------------------  ----------------------  -------------------------
+Electronics                    0     43886944                    477968                       478018                          478035                  478882                     521518
+Toys_and_Games                 0     16260406                    174037                       174053                          174056                  174375                     207966
+Video_Games                    0      4624615                     53646                        53648                           53653                   53782                      69115
+```
+
+"Beyond the first" is the number of rows a de-duplication on that key removes.
+
+```
+$ python scripts/run_athena_query.py sql/analysis/duplicate_differences.sql
+category        repeated_reviews  extra_copies  most_copies  differ_in_asin  differ_in_rating  differ_in_helpful_vote  largest_vote_difference  differ_in_verified  differ_in_title  differ_in_text
+--------------  ----------------  ------------  -----------  --------------  ----------------  ----------------------  -----------------------  ------------------  ---------------  --------------
+Electronics               404892        478035           27              17                 2                      49                       19                   3               10              16
+Toys_and_Games            146976        174056           15               3                 0                      15                        2                   0                2               2
+Video_Games                45201         53653           11               5                 0                       3                        2                   0                1               0
+
+$ python scripts/run_athena_query.py sql/analysis/repeat_reviews.sql
+category        user_product_pairs_with_several_times  of_which_identical_text
+--------------  -------------------------------------  -----------------------
+Electronics                                     40697                     5954
+Toys_and_Games                                  29030                     5116
+Video_Games                                     12937                     2874
+```
+
+What the numbers say:
+
+- **Almost all repeats are exact copies.** Every-field duplicates are within
+  0.02% of the chosen key's count in each category. Some reviews appear up to
+  27 times.
+- **`parent_asin`, not `asin`.** A few reviews (17, 3 and 5) are attached to
+  two variants of the same product. Product ratings are reported per
+  `parent_asin`, so counting such a review once per variant would inflate
+  that product's count.
+- **Not every field.** Copies that differ only in `helpful_vote` are
+  snapshots of one review taken at different times. The copy with the most
+  votes is kept, because vote counts only grow.
+- **The product must be in the key.** `(user_id, timestamp)` alone would
+  remove 847, 319 and 129 more rows: reviews of *different* products that
+  one user submitted in the same millisecond.
+- **The timestamp must be in the key.** `(user_id, parent_asin)` would
+  remove about 43,000 more rows in Electronics: the same person reviewing
+  the same product again later. Some of these repeat identical text (5,954
+  pairs in Electronics). They are left as separate reviews. Merging them
+  would need a rule for which time to keep, and it would mean looking across
+  months, which breaks month-by-month incremental loads.
+- **Because the timestamp is in the key, every copy of a review falls in the
+  same month.** De-duplicating one month at a time (phase 3) is therefore
+  complete; no other month can hold a copy.
+
+Known limitation: in 18 repeated reviews (16 in Electronics, 2 in Toys) the
+copies' text differs, and in 2 (Electronics) the rating differs, as if the
+review was edited between snapshots. The data has no edit time, so the kept
+copy (most votes, then a fixed column order) is not guaranteed to be the
+latest edit. That is at most 20 of 597,069 repeated reviews.
+
+The three queries scanned 9.24 GB each and cost $0.046 each
+(`benchmarks/athena_queries.jsonl`).
+
+### What the first full run taught: gzip, one task, and FLEX
+
+The Electronics and Toys run of `clean_reviews` took 2,629 seconds and
+13,450 DPU-seconds ($0.76). From its driver log:
+
+| UTC | Event |
+|---|---|
+| 09:07 | Read stage starts: 2 tasks, one per source file. |
+| 09:33 | Read stage ends. The 6.47 GB Electronics file took 25 minutes in a single task. |
+| 09:34 | The next stage fails with `FetchFailedException`: a worker holding read output was lost. |
+| 09:34–09:48 | Spark re-runs the read stage: 14 more minutes. |
+| 09:49 | Write stage: 36 tasks of about 30 seconds on 10 workers. |
+
+Two lessons:
+
+1. **A non-splittable file puts a floor under run time.** One task, one core,
+   25 minutes, no matter how many workers. More workers would only add idle
+   cost; auto scaling at least releases them.
+2. **On FLEX, losing a worker can throw away long work.** FLEX uses spare
+   capacity, which AWS can take back. Spark recovers by recomputing lost shuffle
+   output, but here that meant reading 6.47 GB of gzip again. A long
+   single-task stage is the worst case for this.
+
+So phase 3 pays the gzip cost once: a one-time job splits the raw files into
+monthly pieces, and every monthly run reads small, separate files.
