@@ -1,0 +1,27 @@
+# Raw and sample data: the dataset is for research use and must not be redistributed.
+data/
+
+# Terraform: state can contain resource details, tfvars holds my alert email.
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/*.tfvars
+!infra/terraform/terraform.tfvars.example
+infra/terraform/crash.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Credentials and local settings must never be committed.
+.env
+.env.*
+.aws/
+*.pem
+
+# Editors and OS
+.DS_Store
+.vscode/
+.idea/

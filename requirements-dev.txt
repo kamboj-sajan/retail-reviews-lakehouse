@@ -1,0 +1,5 @@
+# Tools for running the scripts and their tests on a laptop.
+# PySpark is added in phase 2, pinned to the version the Glue runtime uses.
+boto3>=1.35
+pytest>=8.0
+moto[s3]>=5.0
