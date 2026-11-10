@@ -53,6 +53,20 @@ def read_raw_products(spark, raw_path, categories=None):
     return _read_raw_json(spark, f"{raw_path}/meta", RAW_PRODUCT_SCHEMA, categories)
 
 
+def read_table(spark, table_path, month=None, by_category=True):
+    """Read a partitioned Parquet table: all of it, or one month's folders only.
+
+    With a month, only that month's folders are listed. Months may be loaded
+    in parallel, and listing the whole table could catch another run in the
+    middle of replacing its folders. Listing one month's folders is also far
+    quicker than listing all of them.
+    """
+    if not month:
+        return spark.read.parquet(table_path)
+    pattern = f"{table_path}/category=*/review_month={month}" if by_category else f"{table_path}/review_month={month}"
+    return spark.read.option("basePath", table_path).parquet(pattern)
+
+
 def parse_categories(text):
     """'A,B' -> ['A', 'B']; empty or None -> None (meaning every category)."""
     return [c.strip() for c in text.split(",") if c.strip()] if text else None

@@ -18,7 +18,8 @@ from pyspark.sql import functions as F
 from lakehouse.metrics import JobRun, path_bytes
 from lakehouse.schemas import CORRUPT_COLUMN
 from lakehouse.session import build_spark
-from lakehouse.storage import month_argument, parse_categories, raw_paths, read_raw_reviews, write_partitioned
+from lakehouse.storage import (month_argument, parse_categories, raw_paths, read_raw_reviews, read_table,
+                               write_partitioned)
 from lakehouse.transforms import REVIEW_KEY, deduplicate_reviews, type_reviews
 
 
@@ -68,11 +69,9 @@ def main(argv=None):
 
     # Count only what this run wrote. Counting Parquet is cheap: Spark reads
     # the row count stored in each file's footer instead of scanning the data.
-    output = spark.read.parquet(target)
+    output = read_table(spark, target, month)
     if categories:
         output = output.where(F.col("category").isin(categories))
-    if month:
-        output = output.where(F.col("review_month") == month)
     written = output.count()
     counts = run.observed()
     run.record(

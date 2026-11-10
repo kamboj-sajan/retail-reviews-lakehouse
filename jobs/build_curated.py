@@ -15,7 +15,7 @@ from pyspark.sql import functions as F
 
 from lakehouse.metrics import JobRun, path_bytes
 from lakehouse.session import build_spark
-from lakehouse.storage import month_argument, write_partitioned
+from lakehouse.storage import month_argument, read_table, write_partitioned
 from lakehouse.transforms import category_daily, category_monthly, enrich_reviews, product_monthly
 
 AGGREGATES = {
@@ -37,15 +37,10 @@ def main(argv=None):
     spark = build_spark("build_curated")
     run = JobRun(spark, "build_curated", args.metrics_path)
 
-    def this_run(df):
-        """The rows this run is responsible for: one month, or everything."""
-        return df.where(F.col("review_month") == month) if month else df
-
     # Parquet stores each column separately, so leaving out title and text
-    # here means those (large) columns are never read from S3 at all. The
-    # month filter is on a partition column, so Spark reads only that
-    # month's folders (partition pruning).
-    reviews = this_run(spark.read.parquet(f"{args.cleaned_path}/reviews")).drop("title", "text")
+    # here means those (large) columns are never read from S3 at all. With a
+    # month, only that month's folders are listed and read.
+    reviews = read_table(spark, f"{args.cleaned_path}/reviews", month).drop("title", "text")
     products = spark.read.parquet(f"{args.cleaned_path}/products")
 
     enriched = run.observe(
@@ -59,14 +54,14 @@ def main(argv=None):
     # The aggregates read the enriched table back from Parquet instead of
     # recomputing the join three times. Reading a few columns of Parquet is
     # cheaper than a join, and it needs no memory for caching.
-    written = this_run(spark.read.parquet(enriched_path))
+    written = read_table(spark, enriched_path, month)
     run.record(month=month or "all", reviews_enriched_rows=written.count())
     for name, build in AGGREGATES.items():
         target = f"{args.curated_path}/{name}"
         # Partitioned by month because a month is the unit of an incremental
         # load: re-running March replaces only the March folder.
         write_partitioned(build(written), target, ["review_month"])
-        run.record(**{f"{name}_rows": this_run(spark.read.parquet(target)).count()})
+        run.record(**{f"{name}_rows": read_table(spark, target, month, by_category=False).count()})
 
     run.record(output_bytes=path_bytes(spark, args.curated_path))
     run.save()
