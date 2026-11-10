@@ -1,5 +1,35 @@
-"""Make the scripts/ folder importable from the tests."""
+"""Shared test setup: import paths and one SparkSession for the whole run."""
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+import pytest
+
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+for folder in ("scripts", "src", "jobs"):
+    sys.path.insert(0, os.path.join(ROOT, folder))
+
+
+@pytest.fixture(scope="session")
+def spark():
+    """A small local Spark, started once (starting a JVM takes a few seconds).
+
+    The local-only settings are applied first. build_spark() then adds the
+    project's own settings on top, so the tests exercise the same session
+    configuration that the real jobs use.
+    """
+    from pyspark.sql import SparkSession
+
+    from lakehouse.session import build_spark
+
+    (
+        SparkSession.builder.master("local[2]")
+        .config("spark.ui.enabled", "false")
+        # The default of 200 shuffle partitions is sized for a cluster; with a
+        # handful of test rows it only adds seconds of scheduling overhead.
+        .config("spark.sql.shuffle.partitions", "4")
+        .getOrCreate()
+    )
+    session = build_spark("tests")
+    session.sparkContext.setLogLevel("ERROR")
+    yield session
+    session.stop()
