@@ -12,7 +12,7 @@ LOCAL   := data/local
 JAVA_HOME ?= $(shell /usr/libexec/java_home -F -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home)
 export JAVA_HOME
 
-.PHONY: help venv test sample schema local-pipeline glue-run replay idempotency-test fault-injection-test reset-months download-dry-run download tf-init tf-plan tf-apply destroy
+.PHONY: help venv test sample schema local-pipeline glue-run replay idempotency-test fault-injection-test warehouse-setup redshift-query reset-months download-dry-run download tf-init tf-plan tf-apply destroy
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -34,12 +34,14 @@ local-pipeline: ## Run every job on the local sample, writing to data/local/
 	$(SPARK) jobs/clean_reviews.py  --raw_path data/sample/raw --cleaned_path $(LOCAL)/cleaned --quarantine_path $(LOCAL)/quarantine
 	$(SPARK) jobs/clean_products.py --raw_path data/sample/raw --cleaned_path $(LOCAL)/cleaned --quarantine_path $(LOCAL)/quarantine
 	$(SPARK) jobs/build_curated.py  --cleaned_path $(LOCAL)/cleaned --curated_path $(LOCAL)/curated
+	$(SPARK) jobs/load_warehouse.py --cleaned_path $(LOCAL)/cleaned --curated_path $(LOCAL)/curated --staging_path $(LOCAL)/warehouse
 
 glue-run: ## Run a Glue job and report its cost (billable), e.g. make glue-run JOB=rrl-clean-reviews ARGS="--arg categories=Video_Games"
 	$(PY) scripts/run_glue_job.py $(JOB) $(ARGS)
 
 BUCKET = $$($(TF) output -json buckets | $(PY) -c "import json,sys; print(json.load(sys.stdin)['$(1)'])")
 STATE_MACHINE = $$($(TF) output -raw monthly_load_state_machine)
+REDSHIFT = --workgroup $$($(TF) output -raw redshift_workgroup) --database $$($(TF) output -raw redshift_database) --secret-arn $$($(TF) output -raw redshift_admin_secret_arn)
 
 replay: ## Deliver months and wait for the loads they trigger, e.g. make replay MONTHS="2022-10 2022-11"
 	$(PY) scripts/replay_month.py $(MONTHS) --bucket $(call BUCKET,raw) --state-machine $(STATE_MACHINE) --wait
@@ -52,6 +54,12 @@ fault-injection-test: ## Inject bad rows into a month, prove quarantine and the 
 
 reset-months: ## List (or with YES=1 delete) months FROM..TO from cleaned, curated and landing
 	$(PY) scripts/reset_months.py --raw $(call BUCKET,raw) --cleaned $(call BUCKET,cleaned) --curated $(call BUCKET,curated) --from $(FROM) --to $(TO) $(if $(YES),--yes)
+
+warehouse-setup: ## Create the warehouse schema, tables and the load job's database role (safe to re-run)
+	$(PY) scripts/setup_warehouse.py $(REDSHIFT)
+
+redshift-query: ## Run a SQL file in the warehouse as admin, e.g. make redshift-query SQL=sql/warehouse/checks/table_counts.sql
+	$(PY) scripts/run_redshift_query.py $(SQL) $(REDSHIFT) $(ARGS)
 
 download-dry-run: ## List the source files and their sizes (no AWS access needed)
 	python3 scripts/download_raw.py --dry-run
