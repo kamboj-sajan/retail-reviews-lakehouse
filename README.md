@@ -16,7 +16,7 @@ This project is being built in phases. The README describes only what exists.
 | 2 | PySpark ETL on Glue, Glue Data Catalog | Done: all three categories loaded through Glue; every table queryable in Athena |
 | 3 | Incremental monthly loads with Step Functions and EventBridge | Done: 12 months replayed through EventBridge and Step Functions; re-running a month changes nothing |
 | 4 | Redshift Serverless star schema | Not started |
-| 5 | Data quality checks and quarantine | Not started |
+| 5 | Data quality checks and quarantine | Done: bad rows quarantined with a reason; a quality gate fails any month that does not reconcile; proven by injecting bad rows on AWS |
 | 6 | Dashboard | Not started |
 | 7 | Benchmarks and results | Not started |
 
@@ -73,6 +73,7 @@ scripts/run_athena_query.py        runs a SQL file in Athena; records bytes scan
 scripts/replay_month.py            delivers months to the landing area, which triggers their loads
 scripts/reset_months.py            removes a range of months before a replay (dry run by default)
 scripts/test_month_idempotency.py  loads one month twice through Step Functions and compares
+scripts/fault_injection_test.py    injects bad rows into a month to prove quarantine and the quality gate
 scripts/glue_run_costs.py          reads Glue runs back from Glue with their DPU-seconds and cost
 scripts/check_plan.py              refuses a Terraform plan that deletes or replaces anything
 scripts/sample_raw.py              saves a small local sample for development
@@ -81,7 +82,7 @@ scripts/compare_parquet_codecs.py  measures Parquet size per compression codec
 tests/                             tests (no AWS access needed)
 benchmarks/                        one JSON line per Glue run and Athena query actually executed
 docs/schema.md                     the schema observed in the real files
-docs/data-lake-layout.md           paths, columns and types of every layer
+docs/data-lake-layout.md           paths, columns and types of every layer, and the quarantine rules
 docs/decisions.md                  design decisions and trade-offs
 ```
 
@@ -126,6 +127,7 @@ make glue-run JOB=rrl-split-raw-by-month               # once: raw -> one file p
 make reset-months FROM=2022-10 TO=2023-09              # dry run; add YES=1 to delete those months
 make replay MONTHS="2022-10 2022-11"                   # deliver months; EventBridge starts each load
 make idempotency-test MONTH=2023-01                    # load a month twice, compare everything
+make fault-injection-test MONTH=2023-09                # inject bad rows, expect quarantine, then a failed gate; cleans up
 ```
 
 `make tf-apply` plans, refuses any plan that would delete or replace a
@@ -313,3 +315,49 @@ started with an invalid month (`202301`) went
 HasMonth -> CheckMonth -> BadMonth -> NotifyFailure -> LoadFailed, and SNS
 delivered the alert email.
 
+### Data quality
+
+Cleaning jobs send every row that breaks a rule to the quarantine bucket with
+the reason; `check_quality` then runs after each monthly load and fails it if
+the layers do not reconcile or a rule was broken
+([docs/decisions.md](docs/decisions.md#phase-5-data-quality) explains both
+layers; [docs/data-lake-layout.md](docs/data-lake-layout.md#quarantine) lists
+the rules).
+
+**What the real data contained.** Before the rules existed,
+`sql/checks/quality_baseline.sql` over every cleaned review found exactly one
+kind of problem: two Electronics reviews with a rating of 0. After their
+months were re-loaded, both are in quarantine and nothing else is:
+
+```
+$ python scripts/run_athena_query.py sql/checks/quarantine_counts.sql
+category     load_month  reason               quarantined_rows
+Electronics  2022-04     rating_out_of_range                 1
+Electronics  2022-12     rating_out_of_range                 1
+```
+
+Cleaned Electronics reviews went from 43,408,909 to 43,408,907 (64,066,219 in
+all three categories), and `reviews_enriched` matches.
+
+**The gate, proven on AWS.** `make fault-injection-test MONTH=2023-09` adds a
+file of made-up bad lines (six kinds, one per rule) to the month's landing
+folder and loads the month through the real state machine three times:
+
+```
+$ make fault-injection-test MONTH=2023-09
+```
+
+| Step | Bad lines added | Landing lines | Quarantined | Cleaned | Execution | Failed check |
+|---|---|---|---|---|---|---|
+| few | 20 | 5,774 | 20 (0.35%) | 5,540 | SUCCEEDED | none |
+| many | 200 | 5,954 | 200 (3.4%) | 5,540 | FAILED at `CheckQuality` | quarantine rate (limit 1%) |
+| removed | 0 | 5,754 | 0 | 5,540 | SUCCEEDED | none |
+
+Every injected line was quarantined under the reason it was built to break
+(for example, in the "few" step: 4 `unparseable_json`, 4 `missing_key`, 3 of
+each other reason), none reached the cleaned table, and the failed execution
+went CheckQuality -> NotifyFailure -> LoadFailed: the check was not retried
+(a failed check is not transient) and the alert was published to SNS. Because the re-run deletes the month's old quarantine
+rows first, the "removed" step leaves the month exactly as before the test.
+The nine Glue runs cost $0.1164 (`scripts/glue_run_costs.py`); the full
+record is `benchmarks/fault_injection_runs.jsonl`.
