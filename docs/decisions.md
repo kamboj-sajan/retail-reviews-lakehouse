@@ -609,6 +609,158 @@ Spark and listing S3, on at least two workers. If loads became more frequent
 larger loads, or a lighter engine for small months, such as Glue's Python
 shell jobs or Athena `INSERT INTO`.
 
+## Phase 4: the Redshift warehouse
+
+Phase 5 was built before phase 4, so the warehouse load could be placed
+after the quality gate from the start.
+
+### A star schema: one fact table, two dimensions
+
+`fact_review` holds one row per review; `dim_product` and `dim_date` describe
+the product and the day. The curated aggregates already answer the three
+dashboard questions, but only at fixed grains; the star answers any grouping
+(store by quarter, weekends against weekdays, verified purchases by price
+band) without a new Spark job. [warehouse.md](warehouse.md) lists the
+columns.
+
+Not built:
+
+- **No `dim_user`.** A user has no attributes in this dataset besides the ID,
+  so a user dimension would be a one-column table. `user_id` stays on the
+  fact table as a degenerate dimension.
+- **No `dim_category`.** Three values, no attributes; it stays a column.
+- **Products are loaded only in a full load.** Product metadata arrives
+  through `clean_products`, which runs only in a backfill. A monthly load
+  adds facts and days, never products.
+
+### Hash keys, not sequence numbers
+
+`product_key` is MD5(`category|parent_asin`), computed in Spark, the same way
+`review_id` already is. Kimball-style integer surrogate keys need a lookup
+against the dimension during every fact load, and an `IDENTITY` column hands
+out different numbers on every reload. A hash needs no lookup, so loads of
+different months never coordinate, and a product gets the same key in every
+load. A review whose product is missing still gets the key that product
+would have, with `has_product = false`.
+
+The cost is width: 32 bytes per key instead of 8, about 1.5 GB more on 64
+million rows before Redshift's column compression.
+
+`date_key` is the integer YYYYMMDD: readable, sortable, and computed from the
+date itself.
+
+### Load files shaped like the tables
+
+COPY from Parquet fills columns by position and requires the file to have
+exactly the table's columns. The lake's files do not: their partition
+columns live in folder names. So `load_warehouse` writes its own load files
+under `s3://<artifacts>/warehouse/<table>/<month or "full">/`, with the
+table's columns in the table's order and types COPY can convert (`ShortType`
+for `SMALLINT`). `tests/test_warehouse.py` parses `sql/warehouse/schema.sql`
+and fails if the two ever disagree.
+
+Two smaller choices in the same place:
+
+- **Snappy, not zstd.** These files exist only to be read by COPY, and
+  snappy is the Parquet codec every reader supports.
+- **The COPY prefix ends in `part-`.** COPY loads every object whose key
+  starts with the prefix. Ending it with Spark's `part-` file name means
+  Spark's `_SUCCESS` marker is never read as data.
+
+COPY cannot truncate a value that is too long for its `VARCHAR` column (the
+`TRUNCATECOLUMNS` option does not apply to Parquet). The column sizes are
+about twice the longest value found (`sql/analysis/warehouse_column_sizes.sql`:
+titles reach 2,000 bytes, stores 915, user IDs 36). The job also measures
+every text column's longest value while it writes, and stops before loading,
+naming the column, if one would not fit.
+
+### One locked transaction per load
+
+A load is sent as one Data API `BatchExecuteStatement`, which runs its
+statements as a single transaction:
+
+```
+LOCK dw.dim_date, dw.fact_review
+CREATE TEMP TABLE stage_fact_review (LIKE dw.fact_review)
+COPY stage_fact_review FROM 's3://.../warehouse/fact_review/2023-01/part-' ... FORMAT AS PARQUET
+DELETE FROM dw.fact_review WHERE review_month = '2023-01'
+INSERT INTO dw.fact_review SELECT * FROM stage_fact_review
+...
+```
+
+- **Replace, never append.** Delete the month, insert the month: a re-run
+  gives the same rows, as in the lake.
+- **DELETE, not TRUNCATE.** TRUNCATE commits on its own in Redshift, which
+  would end the transaction halfway through a full load.
+- **LOCK first.** Up to four months load at once, and two transactions that
+  both delete from and insert into `fact_review` can fail with a
+  serializable isolation error. Taking the locks first makes them wait their
+  turn instead. Only the Redshift part is serialized, and it takes seconds;
+  the Spark work of each month still runs in parallel.
+
+A full load also deletes and re-inserts every row, which leaves deleted rows
+behind until Redshift's automatic vacuum reclaims them.
+
+### Checks after the load
+
+Redshift does not enforce primary or foreign keys. After each load the job
+queries what Redshift now holds and fails if any of these is false:
+
+- fact rows and rating sum equal what Spark wrote (counted during the write);
+- no duplicate `review_id`;
+- every fact row has its `dim_date` row;
+- every fact row with `has_product` has its `dim_product` row, and none
+  without it does.
+
+Redshift's planner *assumes* declared keys hold. So `schema.sql` declares
+only the keys these checks prove, and no foreign key on `product_key`, which
+a review with a missing product would break.
+
+### Why the load comes after the gate
+
+`LoadWarehouse` is the step after `CheckQuality`. A month that fails the
+gate has already been written to the lake (see "The gate stops what comes
+after it" below), but it never reaches the warehouse or anything that reads
+it. The warehouse only ever holds months that reconciled.
+
+### One Spark job, not a separate loader
+
+The Redshift part of a load is waiting on the Data API. It could be a Glue
+Python shell job or Step Functions' own Data API integration, polling
+`DescribeStatement` in a loop. Keeping it in the Spark job means one step,
+one place where the expected counts live, and the same code tested locally
+with a fake Data API. The price is paying for Spark workers while Redshift
+runs the load: seconds per month.
+
+### Who can do what
+
+- **`rrl_admin`**: created with the namespace. Redshift generates its password
+  and keeps it in Secrets Manager, so it is never in Terraform state. It runs
+  `scripts/setup_warehouse.py` once, and ad-hoc queries.
+- **The load job**: runs as its own IAM role, `rrl-glue-warehouse`, not the
+  lake jobs' role, so lake jobs cannot reach the warehouse and the load job
+  cannot write to the lake. It signs in through the Data API with no
+  password: Redshift creates the database user `IAMR:rrl-glue-warehouse` and,
+  from the role's `RedshiftDbRoles` tag, gives it the database role `loader`,
+  which may only select, insert into and delete from the three tables
+  (`sql/warehouse/grants.sql`).
+- **Redshift itself**: reads load files with `rrl-redshift-copy`, which can
+  read `warehouse/` in the artifacts bucket and nothing else.
+
+### Cost controls
+
+Sydney prices (AWS Price List API): $0.419 per RPU-hour, billed per second
+while queries run, with a 60-second minimum and nothing while idle;
+$0.0261 per GB-month of storage.
+
+- **Base capacity 4 RPUs**, the smallest. 64 million narrow rows is a small
+  warehouse.
+- **Max capacity 8 RPUs**: Redshift may scale up, but not past twice the base.
+- **A usage limit of 24 RPU-hours a month** (about $10) with the action
+  "deactivate": past it, Redshift refuses queries, so loads fail and the
+  alert goes out. This is the hard limit the budget alarm cannot be (it only
+  sends email, hours late).
+
 ## Phase 5: data quality
 
 ### Two layers of defence: quarantine rules, then a gate

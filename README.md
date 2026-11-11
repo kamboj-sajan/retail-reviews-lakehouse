@@ -15,7 +15,7 @@ This project is being built in phases. The README describes only what exists.
 | 1 | Data lake layers: raw, cleaned, curated | Done: layout defined, jobs tested locally |
 | 2 | PySpark ETL on Glue, Glue Data Catalog | Done: all three categories loaded through Glue; every table queryable in Athena |
 | 3 | Incremental monthly loads with Step Functions and EventBridge | Done: 12 months replayed through EventBridge and Step Functions; re-running a month changes nothing |
-| 4 | Redshift Serverless star schema | Not started |
+| 4 | Redshift Serverless star schema | Built and tested locally; not yet deployed |
 | 5 | Data quality checks and quarantine | Done: bad rows quarantined with a reason; a quality gate fails any month that does not reconcile; proven by injecting bad rows on AWS |
 | 6 | Dashboard | Not started |
 | 7 | Benchmarks and results | Not started |
@@ -67,6 +67,7 @@ src/lakehouse/                     PySpark code shared by every job
 jobs/                              Glue job entry points (also run locally)
 sql/analysis/                      Athena queries behind design decisions
 sql/checks/                        Athena queries that verify loaded data
+sql/warehouse/                     Redshift schema, grants and checks
 scripts/download_raw.py            copies the source files into the raw S3 bucket
 scripts/run_glue_job.py            runs a Glue job; records its time, DPU-seconds and cost
 scripts/run_athena_query.py        runs a SQL file in Athena; records bytes scanned, time and cost
@@ -75,6 +76,8 @@ scripts/reset_months.py            removes a range of months before a replay (dr
 scripts/test_month_idempotency.py  loads one month twice through Step Functions and compares
 scripts/fault_injection_test.py    injects bad rows into a month to prove quarantine and the quality gate
 scripts/glue_run_costs.py          reads Glue runs back from Glue with their DPU-seconds and cost
+scripts/setup_warehouse.py         creates the warehouse schema and the load job's database role
+scripts/run_redshift_query.py      runs a SQL file in the warehouse; records its duration
 scripts/check_plan.py              refuses a Terraform plan that deletes or replaces anything
 scripts/sample_raw.py              saves a small local sample for development
 scripts/inspect_schema.py          profiles the real fields in the sample
@@ -83,6 +86,7 @@ tests/                             tests (no AWS access needed)
 benchmarks/                        one JSON line per Glue run and Athena query actually executed
 docs/schema.md                     the schema observed in the real files
 docs/data-lake-layout.md           paths, columns and types of every layer, and the quarantine rules
+docs/warehouse.md                  the star schema, its loads and who can do what
 docs/decisions.md                  design decisions and trade-offs
 ```
 
@@ -128,7 +132,16 @@ make reset-months FROM=2022-10 TO=2023-09              # dry run; add YES=1 to d
 make replay MONTHS="2022-10 2022-11"                   # deliver months; EventBridge starts each load
 make idempotency-test MONTH=2023-01                    # load a month twice, compare everything
 make fault-injection-test MONTH=2023-09                # inject bad rows, expect quarantine, then a failed gate; cleans up
+
+# Warehouse (billable: Redshift Serverless RPU-seconds while queries run, storage)
+make warehouse-setup                                   # once, before any load: schema, tables, database role
+make glue-run JOB=rrl-load-warehouse                   # full load; after this, every monthly load ends with LoadWarehouse
+make redshift-query SQL=sql/warehouse/checks/table_counts.sql
 ```
+
+Run `make warehouse-setup` right after the `tf-apply` that creates the
+warehouse: from then on each monthly load ends with `LoadWarehouse`, which
+fails until the tables exist.
 
 `make tf-apply` plans, refuses any plan that would delete or replace a
 resource (unless `ALLOW_DESTROY=1`), and only then applies that exact plan.
