@@ -32,6 +32,30 @@ variable "monthly_budget_usd" {
   default     = 50
 }
 
+variable "redshift_database" {
+  description = "Name of the warehouse database in Redshift Serverless."
+  type        = string
+  default     = "reviews"
+}
+
+variable "redshift_base_rpu" {
+  description = "Redshift Serverless base capacity in RPUs: 4, or a multiple of 8 from 8 up."
+  type        = number
+  default     = 4
+}
+
+variable "redshift_max_rpu" {
+  description = "Most RPUs Redshift Serverless may scale up to."
+  type        = number
+  default     = 8
+}
+
+variable "redshift_max_rpu_hours_per_month" {
+  description = "RPU-hours per calendar month after which Redshift refuses queries. 24 at $0.419 = about $10."
+  type        = number
+  default     = 24
+}
+
 variable "alert_email" {
   description = "Where budget alerts are sent. Set it in terraform.tfvars (git-ignored), never in a committed file."
   type        = string

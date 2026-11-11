@@ -1,5 +1,6 @@
 # Monthly incremental load: a month "arrives" -> EventBridge -> Step Functions
-# -> Glue (clean_reviews, then build_curated) -> email on failure.
+# -> Glue (clean_reviews, build_curated, check_quality, load_warehouse)
+# -> email on failure.
 #
 #   scripts/replay_month.py 2023-01
 #     copies   raw/feed/reviews/category=*/review_month=2023-01/*
@@ -16,7 +17,7 @@
 locals {
   raw_bucket     = aws_s3_bucket.lake["raw"].id
   arrival_prefix = "landing/_arrived/"
-  monthly_jobs   = ["clean_reviews", "build_curated", "check_quality"]
+  monthly_jobs   = ["clean_reviews", "build_curated", "check_quality", "load_warehouse"]
   state_machine  = "${var.bucket_prefix}-monthly-load"
   glue_job_arns  = [for name in local.monthly_jobs : "arn:aws:glue:${var.aws_region}:${local.account_id}:job/${aws_glue_job.job[name].name}"]
   glue_task_retry = [
@@ -61,7 +62,7 @@ resource "aws_sfn_state_machine" "monthly_load" {
   type     = "STANDARD"
 
   definition = jsonencode({
-    Comment        = "Load one month: clean the reviews, then rebuild that month's curated tables."
+    Comment        = "Load one month: clean the reviews, rebuild that month's curated tables, check them, load the warehouse."
     TimeoutSeconds = 7200
     StartAt        = "HasMonth"
     States = {
@@ -147,6 +148,22 @@ resource "aws_sfn_state_machine" "monthly_load" {
         ResultPath     = "$.check_quality"
         Retry          = [local.glue_task_retry[0]]
         Catch          = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "NotifyFailure" }]
+        Next           = "LoadWarehouse"
+      }
+      # Only a month that passed the gate gets here. Both retries apply: a
+      # failure here is as likely to be transient (Redshift resuming, a lost
+      # FLEX worker) as real, and a real mismatch fails the retry too.
+      LoadWarehouse = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::glue:startJobRun.sync"
+        Parameters = {
+          JobName   = aws_glue_job.job["load_warehouse"].name
+          Arguments = { "--month.$" = "$.month" }
+        }
+        ResultSelector = { "run_id.$" = "$.Id", "state.$" = "$.JobRunState" }
+        ResultPath     = "$.load_warehouse"
+        Retry          = local.glue_task_retry
+        Catch          = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "NotifyFailure" }]
         Next           = "Loaded"
       }
       Loaded = { Type = "Succeed" }
@@ -201,7 +218,7 @@ resource "aws_iam_role" "monthly_load" {
 }
 
 data "aws_iam_policy_document" "monthly_load" {
-  # Start the two monthly Glue jobs and watch them; nothing else in Glue.
+  # Start the monthly Glue jobs and watch them; nothing else in Glue.
   statement {
     sid       = "RunMonthlyGlueJobs"
     actions   = ["glue:StartJobRun", "glue:GetJobRun", "glue:GetJobRuns", "glue:BatchStopJobRun"]

@@ -47,6 +47,18 @@ locals {
       timeout_minutes     = 30
       max_concurrent_runs = 4
     }
+    load_warehouse = {
+      description = "curated + cleaned -> Redshift star schema; runs after the quality gate"
+      # A month is under a million rows; a full load is 64 million rows of
+      # load files, where the extra workers help.
+      max_workers     = 10
+      execution_class = "FLEX"
+      auto_scaling    = true
+      timeout_minutes = 60
+      # Several months may load at once; their Redshift transactions take
+      # turns (LOCK in lakehouse/warehouse.py).
+      max_concurrent_runs = 4
+    }
     split_raw_by_month = {
       description = "run once: raw review files -> one gzip file per category and month (raw/feed)"
       # Three source files means three tasks, and no shuffle, so one executor
@@ -60,6 +72,19 @@ locals {
       auto_scaling        = false
       timeout_minutes     = 90
       max_concurrent_runs = 1
+    }
+  }
+}
+
+# Arguments only some jobs take.
+locals {
+  job_arguments = {
+    load_warehouse = {
+      "--staging_path"  = "s3://${local.artifacts.id}/${local.warehouse_prefix}"
+      "--workgroup"     = aws_redshiftserverless_workgroup.warehouse.workgroup_name
+      "--database"      = var.redshift_database
+      "--copy_role_arn" = aws_iam_role.redshift_copy.arn
+      "--region"        = var.aws_region
     }
   }
 }
@@ -216,9 +241,10 @@ resource "aws_iam_role_policy" "glue_job" {
 resource "aws_glue_job" "job" {
   for_each = local.glue_jobs
 
-  name         = "${var.bucket_prefix}-${replace(each.key, "_", "-")}"
-  description  = each.value.description
-  role_arn     = aws_iam_role.glue_job.arn
+  name        = "${var.bucket_prefix}-${replace(each.key, "_", "-")}"
+  description = each.value.description
+  # The warehouse load runs as its own role (warehouse.tf); every other job as the lake role.
+  role_arn     = contains(local.warehouse_jobs, each.key) ? aws_iam_role.glue_warehouse.arn : aws_iam_role.glue_job.arn
   glue_version = "6.0"
 
   # FLEX runs on spare capacity: about a third cheaper per DPU-hour, but a run
@@ -248,7 +274,7 @@ resource "aws_glue_job" "job" {
     script_location = "s3://${local.artifacts.id}/${aws_s3_object.job_script[each.key].key}"
   }
 
-  default_arguments = {
+  default_arguments = merge({
     "--job-language"   = "python"
     "--extra-py-files" = "s3://${local.artifacts.id}/${aws_s3_object.lakehouse_zip.key}"
 
@@ -271,7 +297,7 @@ resource "aws_glue_job" "job" {
     # Glue bookmarks track "already processed" files. Idempotency here comes
     # from partition overwrite instead, which is explicit and testable.
     "--job-bookmark-option" = "job-bookmark-disable"
-  }
+  }, lookup(local.job_arguments, each.key, {}))
 
-  depends_on = [aws_cloudwatch_log_group.glue, aws_iam_role_policy.glue_job]
+  depends_on = [aws_cloudwatch_log_group.glue, aws_iam_role_policy.glue_job, aws_iam_role_policy.glue_warehouse]
 }
