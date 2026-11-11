@@ -1,10 +1,13 @@
 # Data lake layout
 
 Three layers, one S3 bucket each. A job only ever reads from the layer to its
-left and writes to the layer to its right.
+left and writes to the layer to its right. Rows the cleaning jobs refuse go to
+a fourth bucket, quarantine, instead of being loaded or dropped.
 
 ```
 raw  ──clean_reviews / clean_products──▶  cleaned  ──build_curated──▶  curated
+                     │
+                     └──────────────────▶  quarantine
 ```
 
 | Layer | Format | Who writes it | Rule |
@@ -12,6 +15,7 @@ raw  ──clean_reviews / clean_products──▶  cleaned  ──build_curated
 | raw | gzipped JSON Lines | `scripts/download_raw.py` | Byte-for-byte copy of the source. Never modified. |
 | cleaned | Parquet (zstd) | `jobs/clean_reviews.py`, `jobs/clean_products.py` | One row per source record, with real types. No aggregation. |
 | curated | Parquet (zstd) | `jobs/build_curated.py` | Aggregated for reporting. Can always be rebuilt from cleaned. |
+| quarantine | Parquet (zstd) | `jobs/clean_reviews.py`, `jobs/clean_products.py` | Rows that broke a rule, with the reason. Never read by a later layer. |
 
 Locally the same layout lives under `data/sample/raw` (input) and `data/local`
 (output), so every job takes the layer roots as arguments and has no idea
@@ -54,7 +58,7 @@ One row per review: copies with the same `category`, `user_id`,
 | `user_id` | string | `user_id` | |
 | `asin` | string | `asin` | The variant that was reviewed. |
 | `parent_asin` | string | `parent_asin` | The product. Join key to `products`. |
-| `rating` | int | `rating` | NULL if the source value is not a whole number. |
+| `rating` | int | `rating` | 1 to 5. Any other value sends the row to quarantine. |
 | `helpful_vote` | int | `helpful_vote` | NULL if the source value does not fit an int. |
 | `verified_purchase` | boolean | `verified_purchase` | |
 | `title` | string | `title` | |
@@ -65,9 +69,8 @@ One row per review: copies with the same `category`, `user_id`,
 | `category` | string | folder name | Partition column. |
 | `review_month` | string | `timestamp` | Partition column, `YYYY-MM` in UTC. |
 
-A review whose `timestamp` is missing gets a NULL `review_month`, which Spark
-writes to a folder named `review_month=__HIVE_DEFAULT_PARTITION__`. The quality
-checks in phase 5 will route such rows to quarantine instead.
+`user_id`, `parent_asin`, `review_ts`, `review_month` and `rating` are never
+NULL: a row missing any of them is quarantined (see [quarantine](#quarantine)).
 
 ### `products/`
 
@@ -140,11 +143,42 @@ category_daily/review_month=<YYYY-MM>/part-*.zstd.parquet
 product_monthly/review_month=<YYYY-MM>/part-*.zstd.parquet
 ```
 
+## quarantine
+
+```
+reviews/category=<category>/load_month=<YYYY-MM>/part-*.zstd.parquet
+products/category=<category>/part-*.zstd.parquet
+```
+
+| Column | Type | Notes |
+|---|---|---|
+| `reason` | string | The first rule the row broke (below). |
+| `record` | string | The original line if it was not valid JSON, otherwise its raw fields as JSON, before any type conversion. |
+| `category` | string | Partition column. |
+| `load_month` | string | Reviews only. Partition column: the month being loaded; in a backfill, the row's own month, or `unknown`. |
+
+Review rules, checked in this order:
+
+| `reason` | The row is quarantined when |
+|---|---|
+| `unparseable_json` | the line is not valid JSON, or a field has the wrong type |
+| `missing_key` | `user_id`, `parent_asin` or `timestamp` is missing |
+| `timestamp_out_of_range` | the timestamp is before 1970 or after 2099 |
+| `rating_not_whole_number` | the rating is missing, or not a whole number |
+| `rating_out_of_range` | the rating is a whole number outside 1 to 5 |
+| `outside_month` | monthly runs only: the timestamp falls in another month |
+
+Products have the first two rules only (the key is `parent_asin`).
+
+A run replaces exactly the quarantine partitions it is responsible for (one
+`load_month` in a monthly run), so re-running a month never counts its bad
+rows twice.
+
 ## Catalog
 
 Every table above is registered in the Glue Data Catalog by Terraform
-(`infra/terraform/catalog.tf`), in databases `rrl_raw`, `rrl_cleaned` and
-`rrl_curated`. Athena finds partitions through partition projection, so a
+(`infra/terraform/catalog.tf`), in databases `rrl_raw`, `rrl_cleaned`,
+`rrl_curated` and `rrl_quarantine`. Athena finds partitions through partition projection, so a
 newly written month is queryable without a crawler or `MSCK REPAIR TABLE`.
 `rrl_raw.reviews` and `rrl_raw.products` read the gzipped JSON directly.
 
@@ -153,4 +187,5 @@ newly written month is queryable without a crawler or `MSCK REPAIR TABLE`.
 Each job run writes one JSON record to
 `<metrics>/job_name=<job>/run_id=<start time>/`: row counts collected during
 the write, bytes read and written, and duration. On AWS `<metrics>` is
-`s3://<artifacts>/metrics`.
+`s3://<artifacts>/metrics`. `check_quality` writes one too, with every check
+it ran, its measured value and whether it passed (`checks_json`).
