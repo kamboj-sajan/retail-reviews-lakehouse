@@ -830,3 +830,65 @@ for (`category=*/load_month=<month>` in a monthly run).
 `CheckQuality` retries only `Glue.ConcurrentRunsExceededException` (the job
 is busy). A failed check is deterministic, the same data gives the same
 answer, so retrying it would only delay the alert.
+
+## Phase 6: dashboard
+
+### A generated page, not a BI service
+
+`make dashboard` runs three Athena queries and writes one self-contained HTML
+file: data, styles and chart code inline, no server, no external requests.
+It opens from disk and can be attached or published anywhere.
+
+QuickSight was the obvious alternative. Its per-user monthly subscription
+would by itself be a large share of this project's $50 monthly budget, for
+three charts that change once a month. A static page costs $0.0012 per build
+(the Athena scans) and nothing to keep.
+
+Like everything else under `data/`, the generated page is not committed: it
+contains product titles and figures derived from the dataset.
+`docs/dashboard.png` is a screenshot of it.
+
+### Athena over the curated tables, not Redshift
+
+The curated aggregates were built for exactly these three visuals
+([data-lake-layout.md](data-lake-layout.md#aggregates)), so the queries read
+at most `product_monthly` for 18 months. Through Athena that is 223 MB, about
+$0.001. Redshift Serverless charges at least 60 seconds at the base capacity
+each time it wakes (4 RPUs x 60 s x $0.419 per RPU-hour = $0.028), and the
+dashboard would then depend on the warehouse being up. The warehouse is for
+ad-hoc questions the aggregates cannot answer.
+
+### How the sale effect is measured
+
+Average reviews per day in the 28 days after a sale, against the 28 days
+before it; the sale days themselves count for neither. Decided before
+looking at the numbers, and kept simple on purpose:
+
+- **Reviews lag purchases**, so the effect of a sale shows after it.
+- **Black Friday's "after" includes the December holidays.** The two cannot
+  be separated with review dates alone, and the page says so.
+- **Prime Day 2023 is left out.** Its 28 days after run into August and
+  September 2023, when the dataset is already tapering off because collection
+  ended.
+
+### How "falling ratings" is measured
+
+Average rating over October 2022 to March 2023 against October 2021 to
+September 2022, as rating sum over review count across each whole window
+(never an average of monthly averages). Only products with at least 50
+reviews in both windows qualify (7,931 did), so a fall is not three angry
+reviews. The windows end in March 2023 because review volume falls steeply
+from April 2023 as the dataset's collection ends. A product is a
+`parent_asin`, which groups variants and relisted versions of an item, so a
+"product" can change underneath its reviews; that is visible in the list,
+where a few 2023 ASINs carry reviews from 2021.
+
+### Colours and accessibility
+
+The three categories take the first three slots of a palette validated for
+colour-vision deficiency (worst pair: CVD ΔE 9.2 light, 9.4 dark, all three
+pairs), each with its own step for the dark theme. The third (aqua) is under
+3:1 contrast on the light surface, so no chart relies on colour alone: there
+is a legend, direct labels where they fit, a hover tooltip (and arrow keys
+on a focused chart), and a table under every chart. Checked by screenshot at
+desktop and phone widths, in both themes.

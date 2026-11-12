@@ -17,7 +17,7 @@ This project is being built in phases. The README describes only what exists.
 | 3 | Incremental monthly loads with Step Functions and EventBridge | Done: 12 months replayed through EventBridge and Step Functions; re-running a month changes nothing |
 | 4 | Redshift Serverless star schema | Built and tested locally; not yet deployed |
 | 5 | Data quality checks and quarantine | Done: bad rows quarantined with a reason; a quality gate fails any month that does not reconcile; proven by injecting bad rows on AWS |
-| 6 | Dashboard | Not started |
+| 6 | Dashboard | Done: one self-contained page built from the curated tables by `make dashboard` |
 | 7 | Benchmarks and results | Not started |
 
 ## Dataset
@@ -68,6 +68,8 @@ jobs/                              Glue job entry points (also run locally)
 sql/analysis/                      Athena queries behind design decisions
 sql/checks/                        Athena queries that verify loaded data
 sql/warehouse/                     Redshift schema, grants and checks
+sql/dashboard/                     Athena queries behind the dashboard
+dashboard/template.html            the dashboard page, filled in by build_dashboard.py
 scripts/download_raw.py            copies the source files into the raw S3 bucket
 scripts/run_glue_job.py            runs a Glue job; records its time, DPU-seconds and cost
 scripts/run_athena_query.py        runs a SQL file in Athena; records bytes scanned, time and cost
@@ -78,6 +80,7 @@ scripts/fault_injection_test.py    injects bad rows into a month to prove quaran
 scripts/glue_run_costs.py          reads Glue runs back from Glue with their DPU-seconds and cost
 scripts/setup_warehouse.py         creates the warehouse schema and the load job's database role
 scripts/run_redshift_query.py      runs a SQL file in the warehouse; records its duration
+scripts/build_dashboard.py         queries the curated tables and writes the dashboard page
 scripts/check_plan.py              refuses a Terraform plan that deletes or replaces anything
 scripts/sample_raw.py              saves a small local sample for development
 scripts/inspect_schema.py          profiles the real fields in the sample
@@ -132,6 +135,9 @@ make reset-months FROM=2022-10 TO=2023-09              # dry run; add YES=1 to d
 make replay MONTHS="2022-10 2022-11"                   # deliver months; EventBridge starts each load
 make idempotency-test MONTH=2023-01                    # load a month twice, compare everything
 make fault-injection-test MONTH=2023-09                # inject bad rows, expect quarantine, then a failed gate; cleans up
+
+# Dashboard (billable: Athena, about $0.001)
+make dashboard                                         # writes data/dashboard/index.html
 
 # Warehouse (billable: Redshift Serverless RPU-seconds while queries run, storage)
 make warehouse-setup                                   # once, before any load: schema, tables, database role
@@ -374,3 +380,31 @@ went CheckQuality -> NotifyFailure -> LoadFailed: the check was not retried
 rows first, the "removed" step leaves the month exactly as before the test.
 The nine Glue runs cost $0.1164 (`scripts/glue_run_costs.py`); the full
 record is `benchmarks/fault_injection_runs.jsonl`.
+
+### Dashboard
+
+```
+$ make dashboard
+wrote data/dashboard/index.html  (3 queries, 222,956,450 bytes scanned, $0.001218)
+```
+
+![The dashboard: rating trends, daily review volume around sale periods, and the products whose ratings fell most](docs/dashboard.png)
+
+What it shows, with the numbers behind each in the page's tables:
+
+- **Toys & Games is rated highest almost every month.** Since 2010 monthly
+  averages stay between 3.71 and 4.41 stars, and Toys & Games is the highest
+  of the three in 159 of 165 months. Over every review: Electronics 4.10,
+  Toys & Games 4.21, Video Games 4.05; 92% are verified purchases.
+- **Black Friday moves reviews; Prime Day barely does.** In the 28 days after
+  each Black Friday from 2019 to 2022, Toys & Games had 31% to 121% more
+  reviews per day than in the 28 days before (those weeks also hold the
+  December holidays). After Prime Day the change was -15% to +31% across
+  categories.
+- **The steepest falls cluster in cheap toys.** Of 7,931 products with 50+
+  reviews in both windows, the biggest drop was 3.98 to 1.84 stars. Five of
+  the 20 biggest falls are toy vehicles from two stores (TEMI, Nicmore) and
+  three are slime kits; three Amazon devices and accessories are also there.
+
+Why a generated page rather than a BI service, and how each measure is
+defined: [docs/decisions.md](docs/decisions.md#phase-6-dashboard).
