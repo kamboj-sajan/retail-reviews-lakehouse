@@ -227,7 +227,8 @@ Snappy, Spark's default, is weak on long text, and review text is most of the
 bytes. Zstd compresses about as well as gzip and decompresses much faster.
 "By month" is inflated on the sample by the tiny files described above; "by
 category" is closer to what full-size files will look like. These are sample
-numbers only. The real comparison is a phase 7 benchmark.
+numbers only. On the full data the result was different: see
+"Parquet did not save storage here" under phase 7.
 
 Redshift does not read the lake's files directly in this design. Its `COPY`
 requires files whose columns match the target table exactly, so phase 4
@@ -892,3 +893,49 @@ pairs), each with its own step for the dark theme. The third (aqua) is under
 is a legend, direct labels where they fit, a hover tooltip (and arrow keys
 on a focused chart), and a table under every chart. Checked by screenshot at
 desktop and phone widths, in both themes.
+
+## Phase 7: benchmarks
+
+### What was measured, and how
+
+- **Queries** (`scripts/run_benchmarks.py`, `sql/benchmarks/`): the same three
+  questions asked of each layer in Athena. Cheap queries ran three times and
+  report the median; the raw queries scan every byte of the source ($0.046 a
+  time) and ran once. Athena's query result reuse is off, so repeats are
+  real runs.
+- **Storage** (`scripts/measure_storage.py`): object sizes from S3 listings,
+  per layer and category.
+- **Pipeline cost**: Glue's own billed DPU-seconds per run
+  (`scripts/glue_run_costs.py`), checked against the bill in Cost Explorer.
+
+### Speed comes from splitting, not only from bytes
+
+The text search (Q3) has to read `text`, Parquet's biggest column: 5.58 GB
+against the raw 9.24 GB, so only 40% fewer bytes and 40% lower cost. It was
+still 106 times faster (3.6 s against 383 s). A gzip file is one stream that
+can only be read from the start, so Athena reads each of the three raw
+files with one worker; the cleaned table is 881 files that Athena reads in
+parallel. When a query needs few columns (Q1, Q2) the two effects multiply.
+
+### Parquet did not save storage here
+
+On the sample, zstd Parquet by category came out at 0.91x the gzipped JSON.
+On the full data the cleaned reviews are 1.03x (9.52 GB against 9.24 GB),
+for two reasons:
+
+- **Columns were added.** `review_id` is an MD5: 16 bytes of information per
+  row that no codec can compress, at least 1.0 GB over 64 million rows.
+  `review_ts` and `review_date` repeat the timestamp in two more forms.
+- **Partitioning by month** splits each category into about 300 files, each
+  with its own dictionaries and footer.
+
+That is a fair price: storing the whole cleaned table costs about $0.24 a
+month (9.52 GB at $0.025 per GB-month), the price of five Q1-style queries
+against the raw JSON.
+
+### Quarantine and de-duplication change answers, not only costs
+
+Raw JSON gives a different answer to every question: Q1 counts 705,746 more
+reviews (705,744 duplicate copies and the two rating-0 reviews), and the
+January 2023 count in Q2 is 8,121 too high. Faster queries over the raw files
+would still be wrong.

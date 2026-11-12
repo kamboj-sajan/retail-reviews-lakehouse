@@ -1,0 +1,92 @@
+[
+ {
+  "question": "Q1 reviews and rating per category and year",
+  "layer": "raw",
+  "runs": 1,
+  "bytes": 9237555655,
+  "median_engine_s": 306.2,
+  "median_total_s": 306.51,
+  "cost_usd": 0.046188,
+  "result_rows": 79,
+  "reviews": 64771965
+ },
+ {
+  "question": "Q1 reviews and rating per category and year",
+  "layer": "cleaned",
+  "runs": 3,
+  "bytes": 56965776,
+  "median_engine_s": 2.55,
+  "median_total_s": 2.69,
+  "cost_usd": 0.000285,
+  "result_rows": 79,
+  "reviews": 64066219
+ },
+ {
+  "question": "Q1 reviews and rating per category and year",
+  "layer": "curated",
+  "runs": 3,
+  "bytes": 62897,
+  "median_engine_s": 1.02,
+  "median_total_s": 1.13,
+  "cost_usd": 5.2e-05,
+  "result_rows": 79,
+  "reviews": 64066219,
+  "same_as_cleaned": true
+ },
+ {
+  "question": "Q2 one month (2023-01) per category",
+  "layer": "raw",
+  "runs": 1,
+  "bytes": 9237555655,
+  "median_engine_s": 283.68,
+  "median_total_s": 283.86,
+  "cost_usd": 0.046188,
+  "result_rows": 3,
+  "reviews": 781518
+ },
+ {
+  "question": "Q2 one month (2023-01) per category",
+  "layer": "cleaned",
+  "runs": 3,
+  "bytes": 270384,
+  "median_engine_s": 0.83,
+  "median_total_s": 0.95,
+  "cost_usd": 5.2e-05,
+  "result_rows": 3,
+  "reviews": 773397
+ },
+ {
+  "question": "Q2 one month (2023-01) per category",
+  "layer": "curated",
+  "runs": 3,
+  "bytes": 278,
+  "median_engine_s": 0.39,
+  "median_total_s": 0.54,
+  "cost_usd": 5.2e-05,
+  "result_rows": 3,
+  "reviews": 773397,
+  "same_as_cleaned": true
+ },
+ {
+  "question": "Q3 reviews mentioning \"battery\"",
+  "layer": "raw",
+  "runs": 1,
+  "bytes": 9237555655,
+  "median_engine_s": 383.03,
+  "median_total_s": 383.19,
+  "cost_usd": 0.046188,
+  "result_rows": 3,
+  "reviews": 2204580
+ },
+ {
+  "question": "Q3 reviews mentioning \"battery\"",
+  "layer": "cleaned",
+  "runs": 3,
+  "bytes": 5583928171,
+  "median_engine_s": 3.62,
+  "median_total_s": 3.79,
+  "cost_usd": 0.02792,
+  "result_rows": 3,
+  "reviews": 2180665
+ }
+]

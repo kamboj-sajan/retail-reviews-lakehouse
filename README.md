@@ -18,7 +18,7 @@ This project is being built in phases. The README describes only what exists.
 | 4 | Redshift Serverless star schema | Built and tested locally; not yet deployed |
 | 5 | Data quality checks and quarantine | Done: bad rows quarantined with a reason; a quality gate fails any month that does not reconcile; proven by injecting bad rows on AWS |
 | 6 | Dashboard | Done: one self-contained page built from the curated tables by `make dashboard` |
-| 7 | Benchmarks and results | Not started |
+| 7 | Benchmarks and results | Done: the same questions on raw JSON, Parquet and aggregates; storage per layer; total cost checked against the bill |
 
 ## Dataset
 
@@ -69,6 +69,7 @@ sql/analysis/                      Athena queries behind design decisions
 sql/checks/                        Athena queries that verify loaded data
 sql/warehouse/                     Redshift schema, grants and checks
 sql/dashboard/                     Athena queries behind the dashboard
+sql/benchmarks/                    one SQL file per benchmark question and layer
 dashboard/template.html            the dashboard page, filled in by build_dashboard.py
 scripts/download_raw.py            copies the source files into the raw S3 bucket
 scripts/run_glue_job.py            runs a Glue job; records its time, DPU-seconds and cost
@@ -81,6 +82,8 @@ scripts/glue_run_costs.py          reads Glue runs back from Glue with their DPU
 scripts/setup_warehouse.py         creates the warehouse schema and the load job's database role
 scripts/run_redshift_query.py      runs a SQL file in the warehouse; records its duration
 scripts/build_dashboard.py         queries the curated tables and writes the dashboard page
+scripts/run_benchmarks.py          asks the same questions of each layer; records time, bytes and cost
+scripts/measure_storage.py         adds up what each layer stores in S3
 scripts/check_plan.py              refuses a Terraform plan that deletes or replaces anything
 scripts/sample_raw.py              saves a small local sample for development
 scripts/inspect_schema.py          profiles the real fields in the sample
@@ -243,8 +246,7 @@ has the timeline.
 | `sql/checks/table_counts.sql` (Parquet) | 210,232 bytes | 5.0 | 0.000052 |
 
 Counting rows in Parquet reads only file footers; that is why the last query
-scanned 210 KB. Like-for-like JSON versus Parquet comparisons are a phase 7
-benchmark.
+scanned 210 KB. Like-for-like comparisons are under [Benchmarks](#benchmarks).
 
 ### Incremental monthly loads
 
@@ -408,3 +410,76 @@ What it shows, with the numbers behind each in the page's tables:
 
 Why a generated page rather than a BI service, and how each measure is
 defined: [docs/decisions.md](docs/decisions.md#phase-6-dashboard).
+
+### Benchmarks
+
+**The same question, asked of each layer** (Athena, Sydney, $5 per TB
+scanned with a 10 MB minimum; median of three runs, raw runs once):
+
+```
+$ python scripts/run_benchmarks.py
+```
+
+| Question | Layer | Data scanned | Time (s) | Cost (USD) | Reviews counted |
+|---|---|---|---|---|---|
+| Q1 reviews and rating per category and year | raw gzipped JSON | 9,237,555,655 bytes | 306.2 | 0.046188 | 64,771,965 |
+| | cleaned Parquet | 56,965,776 bytes | 2.6 | 0.000285 | 64,066,219 |
+| | curated aggregate | 62,897 bytes | 1.0 | 0.000052 | 64,066,219 |
+| Q2 one month (2023-01) per category | raw gzipped JSON | 9,237,555,655 bytes | 283.7 | 0.046188 | 781,518 |
+| | cleaned Parquet | 270,384 bytes | 0.8 | 0.000052 | 773,397 |
+| | curated aggregate | 278 bytes | 0.4 | 0.000052 | 773,397 |
+| Q3 reviews mentioning "battery" | raw gzipped JSON | 9,237,555,655 bytes | 383.0 | 0.046188 | 2,204,580 |
+| | cleaned Parquet | 5,583,928,171 bytes | 3.6 | 0.027920 | 2,180,665 |
+
+- **Parquet answered Q1 120 times faster for 1/162 of the cost**, reading two
+  columns instead of every byte. Q2 also skipped every month but one: 270 KB
+  instead of 9.2 GB.
+- **The curated aggregates gave identical answers** to the cleaned table for
+  Q1 and Q2, from kilobytes.
+- **Q3 is the honest case.** It needs the review text, so Parquet read 60% of
+  the bytes and cost 60% as much, yet ran 106 times faster: a gzip stream can
+  only be read by one worker, while the cleaned table is 881 files read in
+  parallel.
+- **Raw JSON is not just slow, it is wrong:** Q1 counts 705,746 extra reviews,
+  the duplicate copies and the two quarantined rows.
+
+Every run is in `benchmarks/query_benchmarks.jsonl`; the eight benchmark
+queries' 18 runs cost $0.2236.
+
+**What each layer stores** (S3 object sizes):
+
+```
+$ python scripts/measure_storage.py --raw ... --cleaned ... --curated ... --quarantine ... --artifacts ...
+```
+
+| Layer | Contents | Files | GB |
+|---|---|---|---|
+| raw | reviews, as downloaded (gzipped JSON) | 3 | 9.24 |
+| raw | product metadata, as downloaded | 3 | 2.07 |
+| raw | `feed/`: reviews split by month for replay | 881 | 9.76 |
+| cleaned | reviews (zstd Parquet) | 881 | 9.52 |
+| cleaned | products | 4 | 0.35 |
+| curated | `reviews_enriched` | 881 | 4.68 |
+| curated | `product_monthly` | 302 | 1.11 |
+| curated | `category_monthly`, `category_daily` | 604 | 0.002 |
+| quarantine | rejected reviews | 2 | 0.000005 |
+
+Cleaned Parquet reviews are 1.03 times the size of the gzipped JSON (Video
+Games 0.99, Electronics 1.03, Toys 1.04): smaller per column, but with an MD5
+`review_id` and two timestamp forms added
+([why that is acceptable](docs/decisions.md#parquet-did-not-save-storage-here)).
+
+**What the whole project cost to build and run so far**, from AWS's own
+billing figures (Cost Explorer, 1 to 12 November 2026, before credits; the
+latest hours of usage may not be billed yet):
+
+| Service | USD | What it paid for |
+|---|---|---|
+| AWS Glue | 2.17 | all 49 Glue runs: initial load, monthly split, 12-month replay, idempotency and fault-injection tests |
+| Amazon S3 | 0.32 | about 38 GB stored, plus requests |
+| Amazon Athena | 0.15 | every analysis, check, dashboard and benchmark query |
+| AWS Step Functions, EventBridge | 0.00 | inside the free tier |
+| **Total** | **2.64** | |
+
+Glue's figure matches the sum of the 49 runs' own billed DPU-seconds
+(`scripts/glue_run_costs.py`: 36,786 DPU-seconds, $2.17).

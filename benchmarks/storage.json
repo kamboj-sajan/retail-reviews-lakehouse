@@ -1,0 +1,301 @@
+{
+ "measured_utc": "2026-11-12T06:00:52+00:00",
+ "areas": [
+  {
+   "bucket": "artifacts",
+   "area": "athena-results",
+   "category": "all",
+   "files": 40,
+   "bytes": 329067
+  },
+  {
+   "bucket": "artifacts",
+   "area": "glue",
+   "category": "all",
+   "files": 6,
+   "bytes": 31080
+  },
+  {
+   "bucket": "artifacts",
+   "area": "metrics",
+   "category": "all",
+   "files": 49,
+   "bytes": 29489
+  },
+  {
+   "bucket": "artifacts",
+   "area": "spark-logs",
+   "category": "all",
+   "files": 194,
+   "bytes": 349222486
+  },
+  {
+   "bucket": "cleaned",
+   "area": "products",
+   "category": "Electronics",
+   "files": 2,
+   "bytes": 233935280
+  },
+  {
+   "bucket": "cleaned",
+   "area": "products",
+   "category": "Toys_and_Games",
+   "files": 1,
+   "bytes": 100826958
+  },
+  {
+   "bucket": "cleaned",
+   "area": "products",
+   "category": "Video_Games",
+   "files": 1,
+   "bytes": 13930898
+  },
+  {
+   "bucket": "cleaned",
+   "area": "products",
+   "category": "all",
+   "files": 4,
+   "bytes": 348693136
+  },
+  {
+   "bucket": "cleaned",
+   "area": "reviews",
+   "category": "Electronics",
+   "files": 298,
+   "bytes": 6690372356
+  },
+  {
+   "bucket": "cleaned",
+   "area": "reviews",
+   "category": "Toys_and_Games",
+   "files": 286,
+   "bytes": 2021641363
+  },
+  {
+   "bucket": "cleaned",
+   "area": "reviews",
+   "category": "Video_Games",
+   "files": 297,
+   "bytes": 804372435
+  },
+  {
+   "bucket": "cleaned",
+   "area": "reviews",
+   "category": "all",
+   "files": 881,
+   "bytes": 9516386154
+  },
+  {
+   "bucket": "curated",
+   "area": "category_daily",
+   "category": "all",
+   "files": 302,
+   "bytes": 1030436
+  },
+  {
+   "bucket": "curated",
+   "area": "category_monthly",
+   "category": "all",
+   "files": 302,
+   "bytes": 527571
+  },
+  {
+   "bucket": "curated",
+   "area": "product_monthly",
+   "category": "all",
+   "files": 302,
+   "bytes": 1109726701
+  },
+  {
+   "bucket": "curated",
+   "area": "reviews_enriched",
+   "category": "Electronics",
+   "files": 298,
+   "bytes": 3206446329
+  },
+  {
+   "bucket": "curated",
+   "area": "reviews_enriched",
+   "category": "Toys_and_Games",
+   "files": 286,
+   "bytes": 1192041044
+  },
+  {
+   "bucket": "curated",
+   "area": "reviews_enriched",
+   "category": "Video_Games",
+   "files": 297,
+   "bytes": 281329625
+  },
+  {
+   "bucket": "curated",
+   "area": "reviews_enriched",
+   "category": "all",
+   "files": 881,
+   "bytes": 4679816998
+  },
+  {
+   "bucket": "quarantine",
+   "area": "reviews",
+   "category": "Electronics",
+   "files": 2,
+   "bytes": 4517
+  },
+  {
+   "bucket": "quarantine",
+   "area": "reviews",
+   "category": "all",
+   "files": 2,
+   "bytes": 4517
+  },
+  {
+   "bucket": "raw",
+   "area": "(other)",
+   "category": "all",
+   "files": 15,
+   "bytes": 9504
+  },
+  {
+   "bucket": "raw",
+   "area": "feed/reviews",
+   "category": "Electronics",
+   "files": 298,
+   "bytes": 6870386750
+  },
+  {
+   "bucket": "raw",
+   "area": "feed/reviews",
+   "category": "Toys_and_Games",
+   "files": 286,
+   "bytes": 2051830504
+  },
+  {
+   "bucket": "raw",
+   "area": "feed/reviews",
+   "category": "Video_Games",
+   "files": 297,
+   "bytes": 836791307
+  },
+  {
+   "bucket": "raw",
+   "area": "feed/reviews",
+   "category": "all",
+   "files": 881,
+   "bytes": 9759008561
+  },
+  {
+   "bucket": "raw",
+   "area": "landing/reviews",
+   "category": "Electronics",
+   "files": 13,
+   "bytes": 564262623
+  },
+  {
+   "bucket": "raw",
+   "area": "landing/reviews",
+   "category": "Toys_and_Games",
+   "files": 13,
+   "bytes": 237469644
+  },
+  {
+   "bucket": "raw",
+   "area": "landing/reviews",
+   "category": "Video_Games",
+   "files": 13,
+   "bytes": 55663183
+  },
+  {
+   "bucket": "raw",
+   "area": "landing/reviews",
+   "category": "all",
+   "files": 39,
+   "bytes": 857395450
+  },
+  {
+   "bucket": "raw",
+   "area": "meta",
+   "category": "Electronics",
+   "files": 1,
+   "bytes": 1312900427
+  },
+  {
+   "bucket": "raw",
+   "area": "meta",
+   "category": "Toys_and_Games",
+   "files": 1,
+   "bytes": 658655829
+  },
+  {
+   "bucket": "raw",
+   "area": "meta",
+   "category": "Video_Games",
+   "files": 1,
+   "bytes": 103096082
+  },
+  {
+   "bucket": "raw",
+   "area": "meta",
+   "category": "all",
+   "files": 3,
+   "bytes": 2074652338
+  },
+  {
+   "bucket": "raw",
+   "area": "reviews",
+   "category": "Electronics",
+   "files": 1,
+   "bytes": 6474438619
+  },
+  {
+   "bucket": "raw",
+   "area": "reviews",
+   "category": "Toys_and_Games",
+   "files": 1,
+   "bytes": 1948910944
+  },
+  {
+   "bucket": "raw",
+   "area": "reviews",
+   "category": "Video_Games",
+   "files": 1,
+   "bytes": 814206092
+  },
+  {
+   "bucket": "raw",
+   "area": "reviews",
+   "category": "all",
+   "files": 3,
+   "bytes": 9237555655
+  }
+ ],
+ "reviews_json_vs_parquet": [
+  {
+   "category": "Electronics",
+   "gzip_json_bytes": 6474438619,
+   "parquet_bytes": 6690372356,
+   "ratio": 1.033,
+   "parquet_files": 298
+  },
+  {
+   "category": "Toys_and_Games",
+   "gzip_json_bytes": 1948910944,
+   "parquet_bytes": 2021641363,
+   "ratio": 1.037,
+   "parquet_files": 286
+  },
+  {
+   "category": "Video_Games",
+   "gzip_json_bytes": 814206092,
+   "parquet_bytes": 804372435,
+   "ratio": 0.988,
+   "parquet_files": 297
+  },
+  {
+   "category": "all",
+   "gzip_json_bytes": 9237555655,
+   "parquet_bytes": 9516386154,
+   "ratio": 1.03,
+   "parquet_files": 881
+  }
+ ]
+}
