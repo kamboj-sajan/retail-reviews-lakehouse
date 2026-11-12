@@ -12,7 +12,7 @@ LOCAL   := data/local
 JAVA_HOME ?= $(shell /usr/libexec/java_home -F -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home)
 export JAVA_HOME
 
-.PHONY: help venv test sample schema local-pipeline glue-run replay idempotency-test fault-injection-test warehouse-setup redshift-query reset-months download-dry-run download tf-init tf-plan tf-apply destroy
+.PHONY: help venv test sample schema local-pipeline glue-run replay idempotency-test fault-injection-test dashboard warehouse-setup redshift-query reset-months download-dry-run download tf-init tf-plan tf-apply destroy
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -54,6 +54,9 @@ fault-injection-test: ## Inject bad rows into a month, prove quarantine and the 
 
 reset-months: ## List (or with YES=1 delete) months FROM..TO from cleaned, curated and landing
 	$(PY) scripts/reset_months.py --raw $(call BUCKET,raw) --cleaned $(call BUCKET,cleaned) --curated $(call BUCKET,curated) --from $(FROM) --to $(TO) $(if $(YES),--yes)
+
+dashboard: ## Query the curated tables in Athena and write data/dashboard/index.html (billable: under a cent)
+	$(PY) scripts/build_dashboard.py
 
 warehouse-setup: ## Create the warehouse schema, tables and the load job's database role (safe to re-run)
 	$(PY) scripts/setup_warehouse.py $(REDSHIFT)

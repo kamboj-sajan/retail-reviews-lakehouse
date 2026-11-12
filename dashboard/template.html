@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retail Reviews Dashboard</title>
+<!--
+  Template for scripts/build_dashboard.py, which replaces the DASHBOARD_DATA
+  placeholder below with the query results and writes data/dashboard/index.html.
+  Self-contained on purpose: no external scripts, fonts or requests.
+  Colors: the first three categorical slots of the dataviz reference palette,
+  validated all-pairs for colour-vision deficiency in both modes; the third
+  (aqua) is under 3:1 on the light surface, so every chart is direct-labelled
+  and has a table view.
+-->
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --surface-2: #f0efec;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --band: rgba(137, 135, 129, 0.16);
+    --s1: #2a78d6;
+    --s2: #eb6834;
+    --s3: #1baf7a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --surface-2: #262624;
+      --ink: #f0efec;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --band: rgba(195, 194, 183, 0.12);
+      --s1: #3987e5;
+      --s2: #d95926;
+      --s3: #199e70;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-2: #262624;
+    --ink: #f0efec;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --band: rgba(195, 194, 183, 0.12);
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1120px; margin: 0 auto; padding: 32px 16px 48px; }
+  header h1 { font-size: 26px; line-height: 1.2; margin: 0 0 6px; font-weight: 650; }
+  header p { margin: 0; color: var(--ink-2); max-width: 760px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 24px 0; }
+  .tile, .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+  .tile { padding: 14px 16px; }
+  .tile .label { color: var(--ink-2); font-size: 13px; }
+  .tile .value { font-size: 28px; font-weight: 650; line-height: 1.2; margin-top: 2px; }
+  .tile .note { color: var(--muted); font-size: 12.5px; }
+  .card { padding: 20px 20px 16px; margin-top: 16px; }
+  .card h2 { font-size: 18px; margin: 0 0 4px; font-weight: 650; }
+  .card .lede { margin: 0 0 12px; color: var(--ink-2); max-width: 780px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 8px; color: var(--ink-2); font-size: 13px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .ring { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 2px solid var(--ink-2); }
+  .bandkey { width: 14px; height: 10px; display: inline-block; background: var(--band); border-radius: 2px; }
+  .chart { position: relative; width: 100%; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart svg:focus { outline: 2px solid var(--s1); outline-offset: 4px; border-radius: 4px; }
+  .panel-title { font-size: 13px; color: var(--ink-2); margin: 10px 0 0; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+  @media (max-width: 480px) {
+    .card { padding: 16px 12px 12px; }
+    th, td { padding: 6px; font-size: 12px; }
+  }
+  text { font-family: inherit; }
+  .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .direct { fill: var(--ink); font-size: 12px; }
+  .marker-label { fill: var(--muted); font-size: 10.5px; }
+  .tooltip {
+    position: absolute; pointer-events: none; z-index: 5; min-width: 150px; max-width: 320px;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 12.5px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12); opacity: 0; transition: opacity 80ms;
+  }
+  .tooltip .t-head { color: var(--ink-2); margin-bottom: 4px; }
+  .tooltip .t-row { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+  .tooltip .t-row b { font-variant-numeric: tabular-nums; font-weight: 600; }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
+  .table-wrap { max-height: 360px; overflow: auto; margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { position: sticky; top: 0; background: var(--surface); color: var(--ink-2); font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .static-table { border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; }
+  footer { margin-top: 28px; color: var(--ink-2); font-size: 13px; }
+  footer p { margin: 6px 0; max-width: 820px; }
+  code { font-size: 12.5px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Retail reviews</h1>
+    <p id="subtitle"></p>
+  </header>
+
+  <section class="tiles" id="tiles" aria-label="Headline numbers"></section>
+
+  <section class="card" aria-labelledby="trend-h">
+    <h2 id="trend-h">Ratings over time</h2>
+    <p class="lede" id="trend-lede"></p>
+    <div class="legend" data-legend></div>
+    <div class="two">
+      <div>
+        <p class="panel-title">Average rating per month (stars)</p>
+        <div class="chart" id="chart-rating"></div>
+      </div>
+      <div>
+        <p class="panel-title">Reviews per month</p>
+        <div class="chart" id="chart-volume"></div>
+      </div>
+    </div>
+    <details><summary>Show as table</summary><div class="table-wrap" id="table-monthly"></div></details>
+  </section>
+
+  <section class="card" aria-labelledby="sales-h">
+    <h2 id="sales-h">Review volume around sale periods</h2>
+    <p class="lede" id="sales-lede"></p>
+    <div class="legend"><span><i class="bandkey"></i>Prime Day</span><span><i class="bandkey"></i>Black Friday to Cyber Monday</span><span>Each panel has its own scale</span></div>
+    <div id="chart-daily"></div>
+    <p class="panel-title" id="sales-table-title"></p>
+    <div class="static-table" id="table-sales"></div>
+  </section>
+
+  <section class="card" aria-labelledby="falling-h">
+    <h2 id="falling-h">Products whose ratings fell the most</h2>
+    <p class="lede" id="falling-lede"></p>
+    <div class="legend" id="falling-legend"></div>
+    <div class="chart" id="chart-falling"></div>
+    <details><summary>Show as table</summary><div class="table-wrap" id="table-falling"></div></details>
+  </section>
+
+  <footer id="footer"></footer>
+</main>
+<div class="tooltip" id="tooltip" role="status" aria-live="polite"></div>
+
+<script>
+const DATA = /*DASHBOARD_DATA*/null;
+// index.html#light or #dark forces a theme (the page otherwise follows the system setting).
+if (["light", "dark"].includes(location.hash.slice(1))) document.documentElement.dataset.theme = location.hash.slice(1);
+
+// ---------------------------------------------------------------- basics
+const CATEGORIES = ["Electronics", "Toys_and_Games", "Video_Games"];   // fixed order = fixed colour slot
+const LABEL = { Electronics: "Electronics", Toys_and_Games: "Toys & Games", Video_Games: "Video Games" };
+const COLOR = { Electronics: "var(--s1)", Toys_and_Games: "var(--s2)", Video_Games: "var(--s3)" };
+const TREND_FROM = "2010-01";   // earlier months have too few reviews for a stable average
+const NS = "http://www.w3.org/2000/svg";
+
+const fmtInt = new Intl.NumberFormat("en-US");
+const fmtCompact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+const fmtMonth = new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+const fmtDay = new Intl.DateTimeFormat("en-US", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+const parseMonth = (m) => Date.UTC(+m.slice(0, 4), +m.slice(5, 7) - 1, 1);
+const parseDay = (d) => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10));
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const clip = (s, n) => (s && s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s || "(no title in metadata)");
+
+function el(tag, attrs = {}, parent) {
+  const node = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (parent) parent.appendChild(node);
+  return node;
+}
+function scale(d0, d1, r0, r1) {
+  const f = (v) => r0 + ((v - d0) / (d1 - d0 || 1)) * (r1 - r0);
+  f.invert = (p) => d0 + ((p - r0) / (r1 - r0 || 1)) * (d1 - d0);
+  return f;
+}
+function niceTicks(lo, hi, count) {
+  const step0 = (hi - lo) / count;
+  const mag = 10 ** Math.floor(Math.log10(step0));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= step0);
+  const ticks = [];
+  // From the tick at or below the lowest value to the tick at or above the highest.
+  for (let v = Math.floor(lo / step) * step; v < hi + step - 1e-9; v += step) ticks.push(+v.toFixed(10));
+  return { ticks, step };
+}
+
+// ---------------------------------------------------------------- tooltip
+const tip = document.getElementById("tooltip");
+function showTip(html, chartEl, x, y) {
+  tip.innerHTML = html;
+  const box = chartEl.getBoundingClientRect();
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let left = box.left + window.scrollX + x + 14;
+  if (left + w > window.scrollX + document.documentElement.clientWidth - 8) left = box.left + window.scrollX + x - w - 14;
+  tip.style.left = Math.max(8, left) + "px";
+  tip.style.top = Math.max(8, box.top + window.scrollY + y - h / 2) + "px";
+  tip.style.opacity = 1;
+}
+function hideTip() { tip.style.opacity = 0; }
+const tipRow = (color, label, value, ring) =>
+  `<div class="t-row"><span><i class="${ring ? "ring" : "swatch"}" style="${ring ? "border-color" : "background"}:${color}"></i> ${esc(label)}</span><b>${value}</b></div>`;
+
+// ---------------------------------------------------------------- line chart
+// series: [{key, label, color, points: [{x (ms), y}]}]; one shared y scale.
+function lineChart(container, opts) {
+  const { series, height = 260, yFormat, tipFormat, yMin, yMax, xLabel, bands = [], directLabels = true,
+          independentY = false, ticksX = 6 } = opts;
+  container.innerHTML = "";
+  const width = Math.max(280, container.clientWidth);
+  // On a narrow screen the labels would take a third of the plot; the legend
+  // and the table view name the series instead.
+  const labelled = directLabels && width >= 520;
+  const m = { top: 10, right: labelled ? 104 : 12, bottom: 26, left: 46 };
+  const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", tabindex: 0,
+                         "aria-label": opts.ariaLabel || "" }, container);
+  const xs = series.flatMap((s) => s.points.map((p) => p.x));
+  const ys = series.flatMap((s) => s.points.map((p) => p.y)).filter((v) => v != null);
+  const x = scale(Math.min(...xs), Math.max(...xs), m.left, width - m.right);
+  const lo = yMin ?? Math.min(...ys), hi = yMax ?? Math.max(...ys);
+  const { ticks } = niceTicks(lo, hi, 4);
+  const y = scale(Math.min(lo, ticks[0]), Math.max(hi, ticks[ticks.length - 1]), height - m.bottom, m.top);
+
+  // sale bands, behind everything
+  let lastLabelX = -Infinity;
+  for (const b of bands) {
+    const x0 = x(b.from), x1 = Math.max(x(b.to), x0 + 3);
+    el("rect", { x: x0 - 1, y: m.top, width: x1 - x0 + 2, height: height - m.top - m.bottom, fill: "var(--band)" }, svg);
+    // Skip a label that would crowd the previous one (Prime Day 2020 was in October, weeks before Black Friday).
+    if (b.label && x0 - lastLabelX >= 22) {
+      lastLabelX = x0;
+      const t = el("text", { x: x0 + (x1 - x0) / 2, y: m.top + 9, class: "marker-label", "text-anchor": "middle" }, svg);
+      t.textContent = b.label;
+    }
+  }
+  // grid + y ticks
+  for (const t of ticks) {
+    el("line", { x1: m.left, x2: width - m.right, y1: y(t), y2: y(t), stroke: "var(--grid)", "stroke-width": 1 }, svg);
+    const label = el("text", { x: m.left - 8, y: y(t) + 4, class: "tick", "text-anchor": "end" }, svg);
+    label.textContent = yFormat(t);
+  }
+  el("line", { x1: m.left, x2: width - m.right, y1: height - m.bottom, y2: height - m.bottom, stroke: "var(--axis)" }, svg);
+  // x ticks: years
+  const firstYear = new Date(Math.min(...xs)).getUTCFullYear(), lastYear = new Date(Math.max(...xs)).getUTCFullYear();
+  const every = Math.max(1, Math.ceil((lastYear - firstYear + 1) / Math.max(2, Math.floor((width - m.left - m.right) / 64))));
+  for (let yr = firstYear; yr <= lastYear; yr++) {
+    const at = Date.UTC(yr, 0, 1);
+    if (at < Math.min(...xs) || (yr - firstYear) % every) continue;
+    const tx = x(at);
+    el("line", { x1: tx, x2: tx, y1: height - m.bottom, y2: height - m.bottom + 4, stroke: "var(--axis)" }, svg);
+    const t = el("text", { x: tx, y: height - m.bottom + 16, class: "tick", "text-anchor": "middle" }, svg);
+    t.textContent = yr;
+  }
+  // lines
+  for (const s of series) {
+    let d = "", pen = false;
+    for (const p of s.points) {
+      if (p.y == null) { pen = false; continue; }
+      d += `${pen ? "L" : "M"}${x(p.x).toFixed(1)},${y(p.y).toFixed(1)}`;
+      pen = true;
+    }
+    el("path", { d, fill: "none", stroke: s.color, "stroke-width": opts.strokeWidth || 2,
+                 "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+  }
+  // direct labels at the right end, nudged apart so they never overlap
+  if (labelled) {
+    const ends = series.map((s) => {
+      const last = [...s.points].reverse().find((p) => p.y != null);
+      return { s, y: y(last.y), x: x(last.x) };
+    }).sort((a, b) => a.y - b.y);
+    for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 15) ends[i].y = ends[i - 1].y + 15;
+    for (const e of ends) {
+      el("circle", { cx: e.x, cy: y([...e.s.points].reverse().find((p) => p.y != null).y), r: 4, fill: e.s.color,
+                     stroke: "var(--surface)", "stroke-width": 2 }, svg);
+      const t = el("text", { x: width - m.right + 10, y: e.y + 4, class: "direct" }, svg);
+      t.textContent = e.s.label;
+    }
+  }
+  // hover layer: crosshair + one tooltip for every series at that x
+  const cross = el("line", { y1: m.top, y2: height - m.bottom, stroke: "var(--axis)", "stroke-width": 1, opacity: 0 }, svg);
+  const dots = series.map((s) => el("circle", { r: 4, fill: s.color, stroke: "var(--surface)", "stroke-width": 2, opacity: 0 }, svg));
+  const allX = [...new Set(xs)].sort((a, b) => a - b);
+  let index = allX.length - 1;
+  const lookup = series.map((s) => new Map(s.points.map((p) => [p.x, p.y])));
+  function show(i) {
+    index = Math.max(0, Math.min(allX.length - 1, i));
+    const at = allX[index], px = x(at);
+    cross.setAttribute("x1", px); cross.setAttribute("x2", px); cross.setAttribute("opacity", 1);
+    let html = `<div class="t-head">${xLabel(at)}</div>`;
+    series.forEach((s, k) => {
+      const v = lookup[k].get(at);
+      if (v == null) { dots[k].setAttribute("opacity", 0); return; }
+      dots[k].setAttribute("cx", px); dots[k].setAttribute("cy", y(v)); dots[k].setAttribute("opacity", 1);
+      html += tipRow(s.color, s.label, tipFormat(v, s, at));
+    });
+    showTip(html, container, px, m.top + 20);
+  }
+  function hide() { cross.setAttribute("opacity", 0); dots.forEach((d) => d.setAttribute("opacity", 0)); hideTip(); }
+  const hit = el("rect", { x: m.left, y: m.top, width: width - m.left - m.right, height: height - m.top - m.bottom,
+                           fill: "transparent" }, svg);
+  hit.addEventListener("pointermove", (ev) => {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) * (width / r.width);
+    const target = x.invert(px);
+    let best = 0;
+    for (let i = 1; i < allX.length; i++) if (Math.abs(allX[i] - target) < Math.abs(allX[best] - target)) best = i;
+    show(best);
+  });
+  hit.addEventListener("pointerleave", hide);
+  svg.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") { ev.preventDefault(); show(index + (ev.key === "ArrowRight" ? 1 : -1)); }
+    if (ev.key === "Escape") hide();
+  });
+  svg.addEventListener("focus", () => show(index));
+  svg.addEventListener("blur", hide);
+}
+
+// ---------------------------------------------------------------- data shaping
+const monthly = DATA.monthly.filter((r) => r.review_month >= TREND_FROM);
+const months = [...new Set(monthly.map((r) => r.review_month))].sort();
+const byCatMonth = {};
+for (const r of monthly) (byCatMonth[r.category] ||= {})[r.review_month] = r;
+const H = DATA.headline;
+
+// ---------------------------------------------------------------- header + tiles
+const lastMonth = fmtMonth.format(parseMonth(H.last_month));
+document.getElementById("subtitle").textContent =
+  `Amazon Reviews 2023 (McAuley Lab, UC San Diego): every cleaned review in three categories, ` +
+  `${fmtMonth.format(parseMonth(H.first_month))} to ${lastMonth}. Built from the lake's curated tables through Athena.`;
+const verified = Object.values(H.categories).reduce((a, c) => a + c.verified_share * c.reviews, 0) / H.reviews;
+const tiles = [
+  ["Reviews", fmtCompact.format(H.reviews), `${fmtInt.format(H.reviews)} after de-duplication and quarantine`],
+  ["Average rating", H.avg_rating.toFixed(2) + " ★", CATEGORIES.map((c) => `${LABEL[c]} ${H.categories[c].avg_rating.toFixed(2)}`).join(" · ")],
+  ["Verified purchases", Math.round(verified * 100) + "%", "of all reviews"],
+  ["Products compared for falling ratings", fmtInt.format(DATA.falling[0]?.qualifying_products ?? 0),
+   `${DATA.windows.min_reviews}+ reviews in both windows; the ${DATA.falling.length} biggest falls are charted below`],
+];
+document.getElementById("tiles").innerHTML = tiles.map(([l, v, n]) =>
+  `<div class="tile"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div><div class="note">${esc(n)}</div></div>`).join("");
+
+document.querySelectorAll("[data-legend]").forEach((node) => {
+  node.innerHTML = CATEGORIES.map((c) => `<span><i class="swatch" style="background:${COLOR[c]}"></i>${LABEL[c]}</span>`).join("");
+});
+
+// ---------------------------------------------------------------- section 1: trends
+const ratingSeries = CATEGORIES.map((c) => ({
+  key: c, label: LABEL[c], color: COLOR[c],
+  points: months.map((mo) => { const r = byCatMonth[c]?.[mo]; return { x: parseMonth(mo), y: r ? r.rating_sum / r.review_count : null, n: r?.review_count }; }),
+}));
+const volumeSeries = CATEGORIES.map((c) => ({
+  key: c, label: LABEL[c], color: COLOR[c],
+  points: months.map((mo) => ({ x: parseMonth(mo), y: byCatMonth[c]?.[mo]?.review_count ?? null })),
+}));
+const peak = (c) => volumeSeries.find((s) => s.key === c).points.reduce((a, p) => (p.y > a.y ? p : a));
+const e = peak("Electronics");
+document.getElementById("trend-lede").textContent =
+  `Monthly averages from ${fmtMonth.format(parseMonth(TREND_FROM))}, when every category has enough reviews for a stable average. ` +
+  `Volume peaked at ${fmtInt.format(e.y)} Electronics reviews in ${fmtMonth.format(e.x)}; the last months fall away because ` +
+  `the dataset was collected in ${lastMonth}, not because people stopped reviewing.`;
+
+function drawTrends() {
+  lineChart(document.getElementById("chart-rating"), {
+    series: ratingSeries, yFormat: (v) => v.toFixed(1), tipFormat: (v) => v.toFixed(2) + " ★",
+    xLabel: (t) => fmtMonth.format(t), ariaLabel: "Average rating per month by category",
+  });
+  lineChart(document.getElementById("chart-volume"), {
+    // No direct labels: all three lines end near zero, where labels would pile up. The legend names them.
+    series: volumeSeries, yMin: 0, directLabels: false, yFormat: (v) => fmtCompact.format(v), tipFormat: (v) => fmtInt.format(v),
+    xLabel: (t) => fmtMonth.format(t), ariaLabel: "Reviews per month by category",
+  });
+}
+document.getElementById("table-monthly").innerHTML =
+  `<table><thead><tr><th>Month</th>${CATEGORIES.map((c) => `<th class="num">${LABEL[c]} reviews</th><th class="num">avg ★</th>`).join("")}</tr></thead><tbody>` +
+  [...months].reverse().map((mo) => `<tr><td>${mo}</td>${CATEGORIES.map((c) => {
+    const r = byCatMonth[c]?.[mo];
+    return r ? `<td class="num">${fmtInt.format(r.review_count)}</td><td class="num">${(r.rating_sum / r.review_count).toFixed(3)}</td>` : `<td class="num">–</td><td class="num">–</td>`;
+  }).join("")}</tr>`).join("") + "</tbody></table>";
+
+// ---------------------------------------------------------------- section 2: sales
+const daily = {};
+for (const r of DATA.daily) (daily[r.category] ||= []).push({ x: parseDay(r.review_date), y: r.review_count });
+const saleNames = [...new Set(DATA.sales.map((s) => s.sale))];
+const saleInfo = saleNames.map((name) => DATA.sales.find((s) => s.sale === name));
+const bands = saleInfo.map((s) => ({ from: parseDay(s.first_day), to: parseDay(s.last_day),
+                                     label: s.sale.startsWith("Prime") ? "PD" : "BF" }));
+const ratio = (sale, c) => DATA.sales.find((s) => s.sale === sale && s.category === c).ratio;
+const bfToys = saleNames.filter((n) => n.startsWith("Black")).map((n) => ratio(n, "Toys_and_Games"));
+const pdAll = saleNames.filter((n) => n.startsWith("Prime")).flatMap((n) => CATEGORIES.map((c) => ratio(n, c)));
+const pct = (r) => `${r >= 1 ? "+" : "−"}${Math.abs(Math.round((r - 1) * 100))}%`;
+document.getElementById("sales-lede").textContent =
+  `Reviews arrive after delivery, so the effect of a sale shows in the weeks after it. Every Black Friday was followed by more ` +
+  `Toys & Games reviews per day than the ${DATA.compare_days} days before it (${pct(Math.min(...bfToys))} to ${pct(Math.max(...bfToys))}), ` +
+  `though those weeks also hold the December holidays. Prime Day moved volume far less: ${pct(Math.min(...pdAll))} to ${pct(Math.max(...pdAll))} across categories.`;
+
+function drawDaily() {
+  const host = document.getElementById("chart-daily");
+  host.innerHTML = "";
+  for (const c of CATEGORIES) {
+    const title = document.createElement("p");
+    title.className = "panel-title";
+    title.innerHTML = `<i class="swatch" style="background:${COLOR[c]}"></i> ${LABEL[c]}: reviews per day`;
+    host.appendChild(title);
+    const box = document.createElement("div");
+    box.className = "chart";
+    host.appendChild(box);
+    lineChart(box, {
+      series: [{ key: c, label: LABEL[c], color: COLOR[c], points: daily[c] }], height: 150, yMin: 0, bands,
+      directLabels: false, strokeWidth: 1.25, yFormat: (v) => fmtCompact.format(v), tipFormat: (v) => fmtInt.format(v),
+      xLabel: (t) => {
+        const sale = saleInfo.find((s) => t >= parseDay(s.first_day) && t <= parseDay(s.last_day));
+        return fmtDay.format(t) + (sale ? ` · ${sale.sale}` : "");
+      },
+      ariaLabel: `${LABEL[c]} reviews per day, with sale periods shaded`,
+    });
+  }
+}
+document.getElementById("sales-table-title").textContent =
+  `Average reviews per day: ${DATA.compare_days} days after each sale against the ${DATA.compare_days} days before it`;
+document.getElementById("table-sales").innerHTML =
+  `<table><thead><tr><th>Sale</th>${CATEGORIES.map((c) => `<th class="num">${LABEL[c]}</th>`).join("")}</tr></thead><tbody>` +
+  saleInfo.map((s) => `<tr><td>${esc(s.sale)}</td>${CATEGORIES.map((c) => {
+    const row = DATA.sales.find((r) => r.sale === s.sale && r.category === c);
+    return `<td class="num" title="${fmtInt.format(Math.round(row.before_per_day))} → ${fmtInt.format(Math.round(row.after_per_day))} per day">${pct(row.ratio)}</td>`;
+  }).join("")}</tr>`).join("") + "</tbody></table>";
+
+// ---------------------------------------------------------------- section 3: falling ratings
+const W = DATA.windows;
+const span = (a, b) => `${fmtMonth.format(parseMonth(a))} to ${fmtMonth.format(parseMonth(b))}`;
+document.getElementById("falling-lede").textContent =
+  `Average rating in ${span(W.recent_from, W.recent_to)} against ${span(W.before_from, W.before_to)}, for the ` +
+  `${fmtInt.format(DATA.falling[0]?.qualifying_products ?? 0)} products with at least ${W.min_reviews} reviews in both windows. ` +
+  `A product here is a parent ASIN, so its reviews can span several listings and versions of the item.`;
+document.getElementById("falling-legend").innerHTML =
+  `<span><i class="ring"></i>${span(W.before_from, W.before_to)}</span><span><i class="swatch" style="background:var(--ink-2)"></i>${span(W.recent_from, W.recent_to)}</span>` +
+  CATEGORIES.map((c) => `<span><i class="swatch" style="background:${COLOR[c]}"></i>${LABEL[c]}</span>`).join("");
+
+function drawFalling() {
+  const host = document.getElementById("chart-falling");
+  host.innerHTML = "";
+  const rows = DATA.falling;
+  const width = Math.max(300, host.clientWidth);
+  const narrow = width < 640;
+  const rowH = narrow ? 46 : 30;
+  const m = { top: 8, right: 16, bottom: 26, left: narrow ? 8 : Math.min(360, width * 0.42) };
+  const height = m.top + rows.length * rowH + m.bottom;
+  const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", tabindex: 0,
+                         "aria-label": "Before and recent average rating of the products whose rating fell the most" }, host);
+  const x = scale(1, 5, narrow ? 8 : m.left, width - m.right);
+  for (let v = 1; v <= 5; v++) {
+    el("line", { x1: x(v), x2: x(v), y1: m.top, y2: height - m.bottom, stroke: "var(--grid)" }, svg);
+    const t = el("text", { x: x(v), y: height - m.bottom + 16, class: "tick", "text-anchor": "middle" }, svg);
+    t.textContent = v + " ★";
+  }
+  rows.forEach((r, i) => {
+    const cy = m.top + i * rowH + rowH - (narrow ? 12 : rowH / 2);
+    const label = el("text", { x: narrow ? 8 : m.left - 12, y: narrow ? cy - 14 : cy + 4,
+                               class: "direct", "text-anchor": narrow ? "start" : "end" }, svg);
+    label.textContent = clip(r.product_title, narrow ? Math.floor(width / 7.2) : Math.floor(m.left / 6.6));
+    const color = COLOR[r.category];
+    el("line", { x1: x(r.recent_avg) + 5, x2: x(r.before_avg) - 5, y1: cy, y2: cy, stroke: color, "stroke-width": 2, opacity: 0.55 }, svg);
+    el("circle", { cx: x(r.before_avg), cy, r: 4.5, fill: "var(--surface)", stroke: color, "stroke-width": 2 }, svg);
+    el("circle", { cx: x(r.recent_avg), cy, r: 5, fill: color, stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    const hit = el("rect", { x: 0, y: cy - rowH / 2, width, height: rowH, fill: "transparent" }, svg);
+    const html = `<div class="t-head">${esc(r.product_title || "(no title in metadata)")}</div>` +
+      `<div class="t-row"><span>${LABEL[r.category]} · ${esc(r.store || "store unknown")}</span></div>` +
+      tipRow(color, span(W.before_from, W.before_to), `${r.before_avg.toFixed(2)} ★ (${fmtInt.format(r.before_reviews)})`, true) +
+      tipRow(color, span(W.recent_from, W.recent_to), `${r.recent_avg.toFixed(2)} ★ (${fmtInt.format(r.recent_reviews)})`) +
+      `<div class="t-row"><span>Change</span><b>${r.change.toFixed(2)} ★</b></div>`;
+    hit.addEventListener("pointermove", (ev) => {
+      const b = svg.getBoundingClientRect();
+      showTip(html, host, (ev.clientX - b.left), cy * (b.height / height));
+    });
+    hit.addEventListener("pointerleave", hideTip);
+  });
+}
+document.getElementById("table-falling").innerHTML =
+  `<table><thead><tr><th>Product</th><th>Category</th><th class="num">Before ★</th><th class="num">Reviews</th><th class="num">Recent ★</th><th class="num">Reviews</th><th class="num">Change</th></tr></thead><tbody>` +
+  DATA.falling.map((r) => `<tr><td>${esc(clip(r.product_title, 90))}<br><span style="color:var(--muted)">${esc(r.parent_asin)}</span></td><td>${LABEL[r.category]}</td>` +
+    `<td class="num">${r.before_avg.toFixed(2)}</td><td class="num">${fmtInt.format(r.before_reviews)}</td>` +
+    `<td class="num">${r.recent_avg.toFixed(2)}</td><td class="num">${fmtInt.format(r.recent_reviews)}</td><td class="num">${r.change.toFixed(2)}</td></tr>`).join("") +
+  "</tbody></table>";
+
+// ---------------------------------------------------------------- footer
+const scanned = DATA.queries.reduce((a, q) => a + q.data_scanned_bytes, 0);
+const cost = DATA.queries.reduce((a, q) => a + q.cost_usd, 0);
+document.getElementById("footer").innerHTML =
+  `<p>Built ${esc(DATA.built_utc.replace("T", " ").replace("+00:00", " UTC"))} by <code>scripts/build_dashboard.py</code>: ` +
+  `${DATA.queries.length} Athena queries over the curated tables scanned ${fmtCompact.format(scanned)}B ` +
+  `($${cost.toFixed(4)}, Athena's 10 MB minimum per query included).</p>` +
+  `<p>Pipeline: raw JSON in S3 → PySpark on AWS Glue (typed, de-duplicated, bad rows quarantined) → Parquet lake → ` +
+  `monthly loads through Step Functions with a quality gate. Dates are UTC.</p>` +
+  `<p>Data: Amazon Reviews 2023, Hou et al., “Bridging Language and Items for Retrieval and Recommendation”, arXiv:2403.03952 (2024). Research use.</p>`;
+
+// ---------------------------------------------------------------- draw, and redraw on resize
+function drawAll() { drawTrends(); drawDaily(); drawFalling(); }
+drawAll();
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawAll, 120); });
+</script>
+</body>
+</html>
